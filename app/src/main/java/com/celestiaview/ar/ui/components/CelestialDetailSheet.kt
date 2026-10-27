@@ -1,6 +1,9 @@
 package com.celestiaview.ar.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,16 +21,19 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -74,6 +80,9 @@ fun CelestialDetailSheet(
                 .heightIn(max = 640.dp) // 内容超高时内部滚动，防止整抽屉把底部控件顶出屏幕
                 .verticalScroll(rememberScrollState())
         ) {
+            // ---------- 高清实拍画幅（程序化底片 → 真实摄影交叉淡化） ----------
+            AstrophotoHeader(vm, red)
+
             // ---------- 标题行 ----------
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -93,14 +102,14 @@ fun CelestialDetailSheet(
                         )
                     }
                 }
-                GlassCapsuleButton(
-                    icon = Icons.Default.Explore,
-                    label = "寻星引导",
+                NakedTextButton(
+                    text = "寻星引导",
+                    selected = vm.guideTarget == target,
                     redLight = red
                 ) { vm.startGuide(target) }
                 Spacer(Modifier.width(4.dp))
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
                 }
             }
 
@@ -151,7 +160,7 @@ fun CelestialDetailSheet(
             )
             val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
             when {
-                rts.circumpolar -> Text("⭐ 拱极星 · 今夜永不落下（最高 %.1f°）".format(rts.transitMaxAltDeg),
+                rts.circumpolar -> Text("拱极星 · 今夜永不落下（最高 %.1f°）".format(rts.transitMaxAltDeg),
                     color = MaterialTheme.colorScheme.onSurfaceVariant.redLightSafe(red), fontSize = 13.sp)
                 rts.neverRises -> Text("今夜位于地平线之下，不可见",
                     color = MaterialTheme.colorScheme.onSurfaceVariant.redLightSafe(red), fontSize = 13.sp)
@@ -278,6 +287,55 @@ fun CelestialDetailSheet(
 // ----------------------------------------------------------------------
 // 辅助
 // ----------------------------------------------------------------------
+
+/**
+ * 详情抽屉顶部高清实拍画幅：径向羽化后的真实天体摄影（未就绪时程序化底片），
+ * 圆形画幅 + 右下角拍摄源标注（NASA / HST / DSS2 Optical Survey）。
+ */
+@Composable
+private fun AstrophotoHeader(vm: SkyViewModel, red: Boolean) {
+    val plate = vm.focusPlate ?: return
+    val photo = vm.focusPhoto
+    val label = vm.focusRequest?.let { req ->
+        if (photo != null) req.sourceLabel else "程序化底片 · 实拍加载中"
+    } ?: return
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(190.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(CelestialPalette.ZenithNight.redLightSafe(red)),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            bitmap = plate,
+            contentDescription = null,
+            contentScale = ContentScale.FillHeight,
+            modifier = Modifier.fillMaxHeight()
+        )
+        if (photo != null) {
+            val fade by animateFloatAsState(targetValue = vm.focusCrossfade, label = "photoFade")
+            Image(
+                bitmap = photo,
+                contentDescription = null,
+                contentScale = ContentScale.FillHeight,
+                modifier = Modifier.fillMaxHeight().alpha(fade)
+            )
+        }
+        Text(
+            label,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 10.dp, bottom = 8.dp),
+            fontSize = 9.sp,
+            letterSpacing = 0.8.sp,
+            style = CelestialType.Tnum.copy(
+                color = Color(0xCCE8C96A).redLightSafe(red)
+            )
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+}
 
 @Composable
 private fun SectionTitle(t: String, color: androidx.compose.ui.graphics.Color) {

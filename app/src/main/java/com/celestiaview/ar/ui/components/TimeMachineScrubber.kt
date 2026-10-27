@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,7 +68,7 @@ fun TimeMachineScrubber(
                 )
                 IconButton(onClick = onToggle) {
                     Icon(
-                        Icons.Default.ExpandLess,
+                        Icons.Outlined.ExpandLess,
                         contentDescription = "收起",
                         tint = accent.redLightSafe(red)
                     )
@@ -128,7 +128,7 @@ fun TimeMachineScrubber(
             Row(Modifier.fillMaxWidth()) {
                 vm.timeRates.forEach { rate ->
                     val label = when {
-                        rate == 0.0 -> "⏸"
+                        rate == 0.0 -> "暂停"
                         rate == 1.0 -> "1×"
                         rate == -300.0 -> "-300×"
                         else -> "%+d×".format(rate.toInt())

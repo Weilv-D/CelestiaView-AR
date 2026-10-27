@@ -12,8 +12,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -70,7 +70,7 @@ fun SearchAndFilterModal(
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
                 }
             }
 
@@ -78,7 +78,7 @@ fun SearchAndFilterModal(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = { Text("输入名称：织女 / Vega / M31 / 木星…") },
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = accent) },
+                leadingIcon = { Icon(Icons.Outlined.Search, null, tint = accent) },
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
@@ -95,14 +95,12 @@ fun SearchAndFilterModal(
 
             Row {
                 tabs.forEachIndexed { i, t ->
-                    GlassCapsuleLabelButton(
-                        icon = Icons.Default.Search,
-                        label = t,
+                    NakedTextButton(
+                        text = t,
                         selected = tab == i,
                         redLight = red,
                         onClick = { tab = i }
                     )
-                    Spacer(Modifier.width(6.dp))
                 }
             }
 

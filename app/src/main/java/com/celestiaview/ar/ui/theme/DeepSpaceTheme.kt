@@ -24,8 +24,6 @@ object CelestialPalette {
     // 2. 磨砂玻璃 HUD 容器（Fluid Glassmorphism）
     val GlassSurface = Color(0xB8091021)      // 主面板背景（72% 深空蓝黑）
     val GlassSurfaceElevated = Color(0xD9101B33) // 模态抽屉/高亮卡片（85%）
-    val GlassPillActive = Color(0x3D56CCF2)   // 激活胶囊背景（24% 冰川青）
-    val GlassPillInactive = Color(0x660B1326) // 未激活胶囊背景（40%）
 
     // 3. 镜面高光渐变描边（1dp Specular Border）
     val BorderHighlightTopLeft = Color(0x59FFFFFF)     // 左上迎光面（35% 白）
@@ -37,9 +35,6 @@ object CelestialPalette {
     val AccentGold = Color(0xFFFFD166)        // 星盘金：行星与黄道高亮
     val GridLineAzAlt = Color(0x1464D2FF)     // 经纬网格（8%）
     val EclipticLine = Color(0x4DFFD166)      // 黄道虚线（30% 金）
-    val ConstellationLineIdle = Color(0x248AB4F8)   // 静默星座连线（14%）
-    val ConstellationLineActive = Color(0xCC64D2FF) // 激活星座内芯（80%）
-    val ConstellationGlowActive = Color(0x3364D2FF) // 激活星座外发光（20%）
 
     // 5. 文字排版三级灰度
     val TextPrimary = Color(0xFFF2F6FF)       // 主标题（微蓝星光白）

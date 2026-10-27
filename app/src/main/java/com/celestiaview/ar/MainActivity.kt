@@ -48,21 +48,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Nightlife
-import androidx.compose.material.icons.filled.Nightlight
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.PhotoCamera
-import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.filled.ScreenRotation
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Nightlight
+import androidx.compose.material.icons.outlined.NightsStay
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.VolumeOff
+import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -116,8 +116,8 @@ import com.celestiaview.ar.data.model.ObservingSite
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.components.CelestialDetailSheet
 import com.celestiaview.ar.ui.components.DockItem
-import com.celestiaview.ar.ui.components.GlassCapsuleLabelButton
 import com.celestiaview.ar.ui.components.GlassPanel
+import com.celestiaview.ar.ui.components.NakedTextButton
 import com.celestiaview.ar.ui.components.SearchAndFilterModal
 import com.celestiaview.ar.ui.components.TargetReticleOverlay
 import com.celestiaview.ar.ui.components.TimeMachineScrubber
@@ -237,7 +237,7 @@ private fun SkyApp(
             when (intent.getStringExtra("navigate")) {
                 "detail" -> {
                     vm.starByName(intent.getStringExtra("target") ?: "")?.let {
-                        vm.select(com.celestiaview.ar.data.model.CelestialTarget.StarTarget(it))
+                        vm.focusOn(com.celestiaview.ar.data.model.CelestialTarget.StarTarget(it))
                         showDetail = true
                     }
                 }
@@ -554,7 +554,7 @@ private fun SkyApp(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    Icons.Default.LocationOn, null,
+                    Icons.Outlined.LocationOn, null,
                     tint = Color(0xFF70D6FF).redLightSafe(red),
                     modifier = Modifier.size(14.dp)
                 )
@@ -630,7 +630,7 @@ private fun SkyApp(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                Icons.Default.Search, "搜索寻星",
+                Icons.Outlined.Search, "搜索寻星",
                 tint = Color(0xCCDBE6F6).redLightSafe(red),
                 modifier = Modifier
                     .size(19.dp)
@@ -638,7 +638,7 @@ private fun SkyApp(
                     .padding(2.dp)
             )
             Icon(
-                Icons.Default.Nightlife, "今夜简报",
+                Icons.Outlined.NightsStay, "今夜简报",
                 tint = Color(0xCCDBE6F6).redLightSafe(red),
                 modifier = Modifier
                     .size(19.dp)
@@ -646,7 +646,7 @@ private fun SkyApp(
                     .padding(2.dp)
             )
             Icon(
-                Icons.Default.AutoAwesome, "星图文化切换",
+                Icons.Outlined.AutoAwesome, "星图文化切换",
                 tint = Color(0xCCDBE6F6).redLightSafe(red),
                 modifier = Modifier
                     .size(19.dp)
@@ -678,7 +678,7 @@ private fun SkyApp(
                     .format(java.util.Date(vm.simTimeMillis))
             }
             val rateText = remember(vm.isLive, vm.timeRate) {
-                if (vm.isLive) "LIVE" else "⏩ %s×".format(
+                if (vm.isLive) "LIVE" else "%s×".format(
                     if (vm.timeRate % 1.0 == 0.0) "%d".format(vm.timeRate.toInt())
                     else "%.1f".format(vm.timeRate)
                 )
@@ -713,24 +713,43 @@ private fun SkyApp(
                     )
                 }
             }
-            // 右下角：视场与姿态状态（点击切换传感器/手势）
-            Text(
-                "FOV %.1f° · %s ›".format(vm.fovYDeg, if (vm.sensorMode) "传感器" else "手势"),
-                modifier = Modifier
+            // 右下角：视场 / 姿态 + 聚焦切换开关
+            Row(
+                Modifier
                     .align(Alignment.BottomEnd)
                     .hudSafeInsets()
-                    .padding(end = 18.dp, bottom = 112.dp)
-                    .clickable { vm.toggleSensorMode() }
-                    .padding(2.dp),
-                fontSize = 11.sp,
-                style = CelestialType.Tnum.copy(
-                    color = Color(0x999AB2D6).redLightSafe(red),
-                    shadow = HudTextShadow
+                    .padding(end = 18.dp, bottom = 112.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "FOV %.1f° · %s ›".format(vm.fovYDeg, if (vm.sensorMode) "传感器" else "手势"),
+                    modifier = Modifier
+                        .clickable { vm.toggleSensorMode() }
+                        .padding(2.dp),
+                    fontSize = 11.sp,
+                    style = CelestialType.Tnum.copy(
+                        color = Color(0x999AB2D6).redLightSafe(red),
+                        shadow = HudTextShadow
+                    )
                 )
-            )
+                Spacer(Modifier.width(14.dp))
+                val focusOn = vm.focusMode
+                Text(
+                    if (focusOn) "聚焦 开" else "聚焦 关",
+                    modifier = Modifier
+                        .clickable {
+                            if (focusOn) vm.exitFocus()
+                            else (vm.selected ?: vm.snapped?.target)?.let { vm.focusOn(it) }
+                        }
+                        .padding(2.dp),
+                    fontSize = 11.sp,
+                    color = (if (focusOn) accent else Color(0x999AB2D6)).redLightSafe(red),
+                    style = TextStyle(shadow = HudTextShadow)
+                )
+            }
         }
 
-        // 吸附目标裸信息行（未锁定时显示，点击进入百科）
+        // 吸附目标裸信息行（未锁定时显示，点击聚焦目标并进入百科）
         if (vm.selected == null) {
             vm.snapped?.let { snap ->
                 Row(
@@ -738,7 +757,10 @@ private fun SkyApp(
                         .align(Alignment.BottomCenter)
                         .hudSafeInsets()
                         .padding(bottom = 148.dp)
-                        .clickable { vm.select(snap.target); showDetail = true }
+                        .clickable {
+                            vm.focusOn(snap.target)
+                            showDetail = true
+                        }
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -779,28 +801,28 @@ private fun SkyApp(
                     .padding(horizontal = 6.dp)
             ) {
                 DockItem(
-                    Icons.Default.CameraAlt, "实景", vm.arMode, red,
+                    Icons.Outlined.CameraAlt, "实景", vm.arMode, red,
                     Modifier.weight(1f)
                 ) { vm.toggleArMode() }
                 DockItem(
-                    Icons.Default.ScreenRotation, "姿态", vm.sensorMode, red,
+                    Icons.Outlined.ScreenRotation, "姿态", vm.sensorMode, red,
                     Modifier.weight(1f)
                 ) { vm.toggleSensorMode() }
                 DockItem(
-                    Icons.Default.AutoAwesome, "星官",
+                    Icons.Outlined.AutoAwesome, "星官",
                     vm.cultureMode != CultureMode.IAU, red,
                     Modifier.weight(1f)
                 ) { vm.cultureMode = vm.cultureMode.next() }
                 DockItem(
-                    Icons.Default.Layers, "图层", showLayers, red,
+                    Icons.Outlined.Layers, "图层", showLayers, red,
                     Modifier.weight(1f)
                 ) { showLayers = !showLayers }
                 DockItem(
-                    Icons.Default.Schedule, "时间", timeMachineExpanded, red,
+                    Icons.Outlined.Schedule, "时间", timeMachineExpanded, red,
                     Modifier.weight(1f)
                 ) { timeMachineExpanded = !timeMachineExpanded }
                 DockItem(
-                    Icons.Default.Nightlight, "夜视", vm.redLight, red,
+                    Icons.Outlined.Nightlight, "夜视", vm.redLight, red,
                     Modifier.weight(1f)
                 ) { vm.toggleRedLight() }
             }
@@ -881,7 +903,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
                 }
             }
             vm.locationProvider.presets.forEach { site ->
@@ -906,7 +928,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
                 )
             }
             Row(Modifier.padding(top = 8.dp)) {
-                GlassCapsuleLabelButton(Icons.Default.LocationOn, "应用坐标", redLight = red) {
+                NakedTextButton("应用坐标", selected = false, redLight = red) {
                     val lat = manualLat.toDoubleOrNull()
                     val lon = manualLon.toDoubleOrNull()
                     if (lat != null && lon != null && lat in -90.0..90.0 && lon in -180.0..180.0) {
@@ -937,7 +959,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
                 steps = 119 // 0.5° 步进
             )
             Row {
-                GlassCapsuleLabelButton(Icons.Default.Star, "对准太阳校准", redLight = red) {
+                NakedTextButton("对准太阳校准", selected = false, redLight = red) {
                     val f = vm.frame
                     if (f.sunAltDeg > 3.0) {
                         val t = vm.calibrateAzimuthTo(f.sunAzDeg)
@@ -950,7 +972,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
                     }
                 }
                 Spacer(Modifier.width(6.dp))
-                GlassCapsuleLabelButton(Icons.Default.Star, "对准月亮校准", redLight = red) {
+                NakedTextButton("对准月亮校准", selected = false, redLight = red) {
                     val f = vm.frame
                     if (f.moonAltDeg > 3.0) {
                         val t = vm.calibrateAzimuthTo(f.moonAzDeg)
@@ -963,7 +985,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
                     }
                 }
                 Spacer(Modifier.width(6.dp))
-                GlassCapsuleLabelButton(Icons.Default.Close, "归零", redLight = red) {
+                NakedTextButton("归零", selected = false, redLight = red) {
                     vm.azimuthTrimDeg = 0.0
                 }
             }
@@ -1032,7 +1054,7 @@ private fun LayerSettingsPanel(
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
                 }
             }
             val toggles = listOf(
@@ -1056,8 +1078,8 @@ private fun LayerSettingsPanel(
                         label, fontSize = 13.sp, modifier = Modifier.weight(1f),
                         color = MaterialTheme.colorScheme.onSurface.redLightSafe(red)
                     )
-                    GlassCapsuleLabelButton(
-                        Icons.Default.Layers, if (current) "开" else "关",
+                    NakedTextButton(
+                        if (current) "开" else "关",
                         selected = current, redLight = red
                     ) { setter(!current) }
                 }
@@ -1072,11 +1094,10 @@ private fun LayerSettingsPanel(
             )
             Row(Modifier.padding(top = 4.dp)) {
                 CultureMode.entries.forEach { mode ->
-                    GlassCapsuleLabelButton(
-                        Icons.Default.Star, mode.labelZh,
+                    NakedTextButton(
+                        mode.labelZh,
                         selected = vm.cultureMode == mode, redLight = red
                     ) { vm.cultureMode = mode }
-                    Spacer(Modifier.width(5.dp))
                 }
             }
 
@@ -1088,16 +1109,11 @@ private fun LayerSettingsPanel(
                 fontSize = 12.sp, fontWeight = FontWeight.Bold
             )
             Row(Modifier.padding(top = 4.dp)) {
-                GlassCapsuleLabelButton(
-                    Icons.Default.PhotoCamera, "星空快门", redLight = red
-                ) { onCapture() }
+                NakedTextButton("星空快门", selected = false, redLight = red) { onCapture() }
                 Spacer(Modifier.width(6.dp))
-                GlassCapsuleLabelButton(
-                    Icons.Default.Place, "观测地点", redLight = red
-                ) { onOpenLocation() }
+                NakedTextButton("观测地点", selected = false, redLight = red) { onOpenLocation() }
                 Spacer(Modifier.width(6.dp))
-                GlassCapsuleLabelButton(
-                    if (vm.soundOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                NakedTextButton(
                     if (vm.soundOn) "声音·开" else "声音·关",
                     selected = vm.soundOn, redLight = red
                 ) { vm.toggleSound() }

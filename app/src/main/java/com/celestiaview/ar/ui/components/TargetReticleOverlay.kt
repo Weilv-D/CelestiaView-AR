@@ -101,6 +101,29 @@ fun TargetReticleOverlay(
 
         val ov = renderer.overlay
 
+        // 淡淡的 N/E/S/W 悬浮方位标：按真实基点方位投影方向悬浮于环外
+        if (!vm.focusMode) {
+            val lr = ringR + 12f * dp
+            val letters = CARDINAL_LETTERS
+            textPaint.isFakeBoldText = false
+            textPaint.setShadowLayer(3f, 0f, 0f, 0xB4000000.toInt())
+            for (q in 0 until 4) {
+                val v = ov.cardinalScreen[q] ?: continue
+                val dx = v.x - cx
+                val dy = v.y - cy
+                val len = kotlin.math.hypot(dx, dy)
+                if (len < 1f) continue
+                val lx = cx + dx / len * lr
+                val ly = cy + dy / len * lr
+                textPaint.color = accentArgb
+                textPaint.alpha = (0.42f * 255f).toInt()
+                textPaint.textSize = 9f * dp
+                val tw = textPaint.measureText(letters[q])
+                n.drawText(letters[q], lx - tw / 2, ly + 3f * dp, textPaint)
+            }
+            textPaint.clearShadowLayer()
+        }
+
         // ---------- 吸附包裹 ----------
         val snapScreen = ov.snappedScreen
         if (snapScreen != null && vm.snapped != null) {
@@ -193,3 +216,6 @@ fun TargetReticleOverlay(
 
 /** Compose Color → ARGB int（零分配内联）。 */
 private fun androidx.compose.ui.graphics.Color.toArgbInt(): Int = this.toArgb()
+
+/** 罗盘方位基点字母（方位 0/90/180/270 → N/E/S/W）。 */
+private val CARDINAL_LETTERS = arrayOf("N", "E", "S", "W")

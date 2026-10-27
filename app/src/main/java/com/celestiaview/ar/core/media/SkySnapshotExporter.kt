@@ -94,7 +94,7 @@ object SkySnapshotExporter {
         }
 
         var y = skyH + 64f * unit
-        canvas.drawText("✦ CELESTIAVIEW AR · 星空铭牌", 48f * unit, y, titlePaint)
+        canvas.drawText("CELESTIAVIEW AR · 星空铭牌", 48f * unit, y, titlePaint)
         y += 44f * unit
 
         val lines = listOf(

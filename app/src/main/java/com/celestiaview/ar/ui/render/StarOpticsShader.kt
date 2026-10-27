@@ -207,8 +207,7 @@ object StarOpticsShader {
     }
 
     /** 衍射星芒原生绘制：主十字 + 45° 对角短芒，全部复用预分配渐变 Paint。 */
-    private fun drawSpikesN(n: Canvas, cx: Float, cy: Float, lengthPx: Float, diagPx: Float, alpha: Float) {
-        val a255 = (alpha * 255f).toInt().coerceIn(0, 255)
+    private fun drawSpikesN(n: Canvas, cx: Float, cy: Float, lengthPx: Float, diagPx: Float, alpha: Float) {        val a255 = (alpha * 255f).toInt().coerceIn(0, 255)
         val d = diagPx * 0.7071f
         // 主十字（水平 / 垂直，线宽 1.2px）
         n.save()
@@ -255,6 +254,27 @@ object StarOpticsShader {
         n.scale(radiusPx, radiusPx)
         n.drawCircle(0f, 0f, 1f, p)
         n.restore()
+    }
+
+    /**
+     * 八芒璀璨耀星（星座骨架主星 / 北斗七星）：
+     * 冰蓝径向发光晕圈 + 纯白圆核 + 4 道长主星芒 + 4 道 45° 交错短星芒，
+     * 芒线自中心纯白线性衰减。零分配（复用 glow / spike / core Paint 池）。
+     */
+    fun drawStarburst8(
+        n: Canvas,
+        cx: Float,
+        cy: Float,
+        coreRadiusPx: Float,
+        longSpikePx: Float,
+        shortSpikePx: Float,
+        alpha: Float
+    ) {
+        glowSpriteN(n, cx, cy, longSpikePx * 0.55f, 0xFF7DD3FC.toInt(), 0.22f * alpha)
+        drawSpikesN(n, cx, cy, longSpikePx, shortSpikePx, 0.9f * alpha)
+        coreFillPaint.color = WHITE
+        coreFillPaint.alpha = (0.95f * alpha * 255f).toInt().coerceIn(0, 255)
+        n.drawCircle(cx, cy, max(coreRadiusPx * 0.8f, 1.6f), coreFillPaint)
     }
 
     /**

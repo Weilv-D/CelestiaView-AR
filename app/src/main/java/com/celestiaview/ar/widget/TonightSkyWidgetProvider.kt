@@ -85,11 +85,11 @@ class TonightSkyWidgetProvider : AppWidgetProvider() {
             if (meta.id == PlanetaryEphemeris.PlanetId.EARTH) continue
             val e = PlanetaryEphemeris.planetEphemeris(meta.id, jd)
             val h = AstrometryEngine.equatorialToHorizontal(e.raDeg, e.decDeg, lst, latDeg)
-            if (h.altDeg > 15.0) items.add("🪐 ${meta.nameZh}")
+            if (h.altDeg > 15.0) items.add("行星 · ${meta.nameZh}")
         }
         for (st in BrightStarCatalog.brightest(8)) {
             val h = AstrometryEngine.equatorialToHorizontal(st.raDeg, st.decDeg, lst, latDeg)
-            if (h.altDeg > 15.0) items.add("✦ ${st.nameZh}")
+            if (h.altDeg > 15.0) items.add("恒星 · ${st.nameZh}")
         }
         return if (items.isEmpty()) "今夜地平线上暂无亮目标，静待星升"
         else "今夜推荐：${items.take(3).joinToString(" · ")}"
