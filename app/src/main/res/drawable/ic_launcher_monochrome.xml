@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ 单色主题图标：四芒主星 + 刻度环剪影 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M56,26 C57.2,43.6 60,47.8 80,52 C60,56.2 57.2,60.4 56,78 C54.8,60.4 52,56.2 32,52 C52,47.8 54.8,43.6 56,26 Z"/>
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M71,30 L72.2,33.3 L75.5,34.5 L72.2,35.7 L71,39 L69.8,35.7 L66.5,34.5 L69.8,33.3 Z"/>
+    <path android:pathData="M54,12 a42,42 0 1,1 -0.01,0 z"
+        android:strokeColor="#FFFFFFFF" android:strokeWidth="1.4" android:fillColor="#00000000"/>
+</vector>
