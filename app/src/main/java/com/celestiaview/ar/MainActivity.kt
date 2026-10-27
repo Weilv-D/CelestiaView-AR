@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -35,11 +36,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -132,6 +136,12 @@ import java.util.Locale
 /** 无框悬浮文字的柔和阴影（保证星空上的可读性）。 */
 private val HudTextShadow = Shadow(color = Color(0xCC000000), blurRadius = 6f)
 
+/** HUD 交互层统一安全区：系统栏与显示凹口的并集；背景渲染层保持全屏穿透，不经此避让。 */
+@Composable
+private fun Modifier.hudSafeInsets(): Modifier = windowInsetsPadding(
+    WindowInsets.systemBars.union(WindowInsets.displayCutout)
+)
+
 class MainActivity : ComponentActivity() {
 
     private val permissionLauncher =
@@ -157,7 +167,15 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // 渲染层铺满凹口两侧；物理遮挡由 HUD 的 displayCutout insets 避让
+            window.attributes = window.attributes.also {
+                it.layoutInDisplayCutoutMode =
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
         setContent {
@@ -243,6 +261,23 @@ private fun SkyApp(
                     if (vm.redLight) vm.toggleRedLight()
                 }
             }
+        }
+    }
+
+    // 系统返回：二级状态逐级收起，纯主星图才放行退出
+    BackHandler(
+        enabled = showDetail || showSearch || showTonight || showLocation || showLayers ||
+            timeMachineExpanded || vm.selected != null || vm.guideTarget != null
+    ) {
+        when {
+            showDetail -> { vm.select(null); showDetail = false }
+            showSearch -> showSearch = false
+            showTonight -> showTonight = false
+            showLocation -> showLocation = false
+            showLayers -> showLayers = false
+            timeMachineExpanded -> timeMachineExpanded = false
+            vm.selected != null -> vm.select(null)
+            else -> vm.clearGuide()
         }
     }
 
@@ -439,21 +474,30 @@ private fun SkyApp(
                 .pointerInput(vm.sensorMode) {
                     if (vm.sensorMode) return@pointerInput
                     val degPerPxY = vm.fovYDeg / size.height.toDouble()
+                    // 左右边缘 16dp 让位于系统返回手势，起点落在边带内的拖拽不驱动星图
+                    val edgeExclusionPx = 16.dp.toPx()
+                    var tracking = true
                     var lastTimeMs = 0L
                     var velX = 0f
                     var velY = 0f
                     detectDragGestures(
-                        onDragStart = { lastTimeMs = 0L; velX = 0f; velY = 0f },
+                        onDragStart = { start ->
+                            lastTimeMs = 0L; velX = 0f; velY = 0f
+                            tracking = start.x >= edgeExclusionPx &&
+                                start.x <= size.width - edgeExclusionPx
+                        },
                         onDrag = { change, drag ->
-                            val dtSec = if (lastTimeMs == 0L) 0.016f
-                            else ((change.uptimeMillis - lastTimeMs).coerceAtLeast(1L)) / 1000f
-                            lastTimeMs = change.uptimeMillis
-                            velX = drag.x / dtSec * 0.65f + velX * 0.35f
-                            velY = drag.y / dtSec * 0.65f + velY * 0.35f
-                            vm.orbit.onDrag(drag.x, drag.y, degPerPxY, degPerPxY)
+                            if (tracking) {
+                                val dtSec = if (lastTimeMs == 0L) 0.016f
+                                else ((change.uptimeMillis - lastTimeMs).coerceAtLeast(1L)) / 1000f
+                                lastTimeMs = change.uptimeMillis
+                                velX = drag.x / dtSec * 0.65f + velX * 0.35f
+                                velY = drag.y / dtSec * 0.65f + velY * 0.35f
+                                vm.orbit.onDrag(drag.x, drag.y, degPerPxY, degPerPxY)
+                            }
                         },
                         onDragEnd = {
-                            vm.orbit.onFling(velX, velY, degPerPxY, degPerPxY)
+                            if (tracking) vm.orbit.onFling(velX, velY, degPerPxY, degPerPxY)
                         }
                     )
                 }
@@ -487,7 +531,7 @@ private fun SkyApp(
                 degradeHint,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .statusBarsPadding()
+                    .hudSafeInsets()
                     .padding(top = 64.dp),
                 fontSize = 11.sp,
                 color = accent.redLightSafe(red),
@@ -498,7 +542,7 @@ private fun SkyApp(
         // ---------------- 左上角：无框天文台信息流 ----------------
         Column(
             Modifier
-                .statusBarsPadding()
+                .hudSafeInsets()
                 .align(Alignment.TopStart)
                 .padding(start = 18.dp, top = 8.dp)
         ) {
@@ -579,7 +623,7 @@ private fun SkyApp(
         // ---------------- 右上角：无框工具图标列 ----------------
         Column(
             Modifier
-                .statusBarsPadding()
+                .hudSafeInsets()
                 .align(Alignment.TopEnd)
                 .padding(end = 18.dp, top = 16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -642,7 +686,7 @@ private fun SkyApp(
             Row(
                 Modifier
                     .align(Alignment.BottomStart)
-                    .navigationBarsPadding()
+                    .hudSafeInsets()
                     .padding(start = 18.dp, bottom = 104.dp)
                     .clickable { timeMachineExpanded = true }
                     .padding(vertical = 2.dp),
@@ -674,7 +718,7 @@ private fun SkyApp(
                 "FOV %.1f° · %s ›".format(vm.fovYDeg, if (vm.sensorMode) "传感器" else "手势"),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
+                    .hudSafeInsets()
                     .padding(end = 18.dp, bottom = 112.dp)
                     .clickable { vm.toggleSensorMode() }
                     .padding(2.dp),
@@ -692,7 +736,7 @@ private fun SkyApp(
                 Row(
                     Modifier
                         .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
+                        .hudSafeInsets()
                         .padding(bottom = 148.dp)
                         .clickable { vm.select(snap.target); showDetail = true }
                         .padding(horizontal = 6.dp, vertical = 2.dp),
@@ -722,7 +766,7 @@ private fun SkyApp(
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
+                .hudSafeInsets()
                 .fillMaxWidth()
         ) {
             if (timeMachineExpanded) {
@@ -775,7 +819,7 @@ private fun SkyApp(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                .hudSafeInsets()
                 .padding(bottom = 150.dp) // 让出底部印记与船坞
         ) {
             AnimatedVisibility(
