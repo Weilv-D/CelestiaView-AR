@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -149,6 +150,13 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
     /** 底片 → 实拍的交叉淡化进度（0..1，帧循环推进）。 */
     var focusCrossfade by mutableFloatStateOf(0f)
         private set
+
+    /** 聚焦目标为恒星时的星表 id（渲染层据此淡化重叠的矢量星点，避免逐帧字符串比较）。 */
+    var focusStarId by mutableIntStateOf(-1)
+        private set
+
+    /** 引导箭头到位后自动平滑变焦至天体特写（今夜简报/搜索的“到位即特写”链路）。 */
+    var guideAutoFocus by mutableStateOf(false)
 
     private val plateCache = HashMap<String, ImageBitmap>()
     val astroRepo by lazy { AstrophotoRepository(getApplication()) }
@@ -328,6 +336,7 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
 
         orbit.update(dtSec)
         if (!sensorMode) boresight = Horizontal(orbit.centerAltDeg, orbit.centerAzDeg)
+        attitudeTracker.viewFovDeg = fovYDeg
 
         frame = computeFrame(simTimeMillis)
 
@@ -335,7 +344,7 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         if (now - lastSnapCheckMs > 90) {
             lastSnapCheckMs = now
             updateSnap()
-            updateConstellationActivation(dtSec * 6.0)
+            updateConstellationActivation(dtSec)
         }
 
         // 磁偏角随地点更新（低频）
@@ -347,6 +356,17 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         // 底片 → 实拍交叉淡化推进
         if (focusPhoto != null && focusCrossfade < 1f) {
             focusCrossfade = (focusCrossfade + dtSec.toFloat() * 1.4f).coerceAtMost(1f)
+        }
+
+        // 退出聚焦后的收尾：视场回到 45° 以上（贴图已完全溶出）才释放实拍资源
+        if (!focusMode && focusRequest != null &&
+            (sensorMode || fovYDeg >= EXIT_RELEASE_FOV_DEG)
+        ) {
+            focusRequest = null
+            focusPlate = null
+            focusPhoto = null
+            focusCrossfade = 0f
+            focusStarId = -1
         }
 
         frameTick++
@@ -443,9 +463,11 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         snapped = best
     }
 
-    private fun updateConstellationActivation(dtScaled: Double) {
+    private fun updateConstellationActivation(dtSec: Double) {
         val b = boresight
         val bRa = AstrometryEngine.equatorialFromHorizontalSafe(b.altDeg, b.azDeg, frame.lstDeg, frame.latitudeDeg)
+        // 指数逼近因子：帧率无关的星座微光呼吸节奏
+        val k = (1.0 - kotlin.math.exp(-dtSec / CONSTELLATION_TAU_SEC)).toFloat()
         for (c in ConstellationCatalog.constellations) {
             val center = constellationCenters[c.abbr] ?: continue
             val sep = AstrometryEngine.angularSeparationDeg(
@@ -453,7 +475,7 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
             )
             val targetW = if (sep < 25.0) 1.0f else 0.0f
             val cur = constellationActivation[c.abbr] ?: 0.0f
-            val next = (cur + (targetW - cur) * dtScaled.toFloat()).coerceIn(0f, 1f)
+            val next = (cur + (targetW - cur) * k).coerceIn(0f, 1f)
             if (next > 0.005f) constellationActivation[c.abbr] = next
             else if (cur > 0f) constellationActivation[c.abbr] = 0f
         }
@@ -508,18 +530,17 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         requestFocusPhoto(target)
     }
 
-    /** 退出聚焦：收起特写，视场阻尼回到广角。 */
+    /**
+     * 退出聚焦：视场阻尼回广角。实拍与底片保留至视场越过 45°（贴图自然溶出）
+     * 后由帧循环释放，避免特写在缩放途中闪断。
+     */
     fun exitFocus() {
         if (!focusMode && focusRequest == null) return
         focusMode = false
-        focusRequest = null
-        focusPlate = null
-        focusPhoto = null
-        focusCrossfade = 0f
         if (!sensorMode) orbit.zoomTo(WIDE_FOV_DEG)
     }
 
-    /** 聚焦目标 → 实拍请求（缓存键 / 巡天视场 / 兜底底片风格 / 源标注）。 */
+    /** 聚焦目标 → 实拍请求（缓存键 / 巡天视场 / 兜底底片风格 / 源标注 / 真实角直径）。 */
     private fun astroRequestFor(t: CelestialTarget): AstroRequest = when (t) {
         is CelestialTarget.StarTarget -> {
             val s = t.star
@@ -528,7 +549,8 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
                 s.constellation == "UMA" && s.id in BIG_DIPPER_IDS -> "UMA" to 15.0
                 else -> "STAR_${s.id}" to 2.5
             }
-            AstroRequest(key, s.raDeg, s.decDeg, fov, PlateStyle.STAR_FIELD, LABEL_DSS2)
+            // 巡天切片贴图覆盖 fov 度天区，角直径即切片视场
+            AstroRequest(key, s.raDeg, s.decDeg, fov, PlateStyle.STAR_FIELD, LABEL_DSS2, fov)
         }
         is CelestialTarget.PlanetTarget -> {
             val style = when (t.key) {
@@ -537,12 +559,15 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
                 else -> PlateStyle.STAR_FIELD
             }
             val label = AstrophotoRepository.curatedLabelFor(t.key) ?: LABEL_DSS2
-            AstroRequest(t.key, t.raDeg, t.decDeg, 0.35, style, label)
+            AstroRequest(t.key, t.raDeg, t.decDeg, 0.35, style, label,
+                PLANET_ANGULAR_DIAMETER_DEG[t.key] ?: 0.01)
         }
         is CelestialTarget.MoonTarget ->
-            AstroRequest("MOON", t.raDeg, t.decDeg, 0.6, PlateStyle.MOON, "Wikimedia Commons · CC BY-SA")
+            AstroRequest("MOON", t.raDeg, t.decDeg, 0.6, PlateStyle.MOON,
+                "Wikimedia Commons · CC BY-SA", 0.52)
         is CelestialTarget.SunTarget ->
-            AstroRequest("SUN", t.raDeg, t.decDeg, 0.6, PlateStyle.SUN, "NASA · SDO AIA")
+            AstroRequest("SUN", t.raDeg, t.decDeg, 0.6, PlateStyle.SUN,
+                "NASA · SDO AIA", 0.53)
         is CelestialTarget.MessierTarget -> {
             val o = t.dso
             val style = when (o.type) {
@@ -555,7 +580,8 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
             }
             val fov = (o.majorAxisArcmin / 60.0 * 3.5).coerceIn(0.8, 2.5)
             AstroRequest(o.catalogId, o.raDeg, o.decDeg, fov, style,
-                AstrophotoRepository.curatedLabelFor(o.catalogId) ?: LABEL_DSS2)
+                AstrophotoRepository.curatedLabelFor(o.catalogId) ?: LABEL_DSS2,
+                o.majorAxisArcmin / 60.0)
         }
     }
 
@@ -564,6 +590,7 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         focusRequest = req
         focusPhoto = null
         focusCrossfade = 0f
+        focusStarId = (t as? CelestialTarget.StarTarget)?.star?.id ?: -1
         val seed = req.key.hashCode()
         viewModelScope.launch {
             focusPlate = plateCache[req.key] ?: withContext(Dispatchers.Default) {
@@ -578,9 +605,11 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun startGuide(target: CelestialTarget) {
+    /** 寻星引导；[autoFocus] 为真时箭头到位即自动平滑变焦至天体特写。 */
+    fun startGuide(target: CelestialTarget, autoFocus: Boolean = false) {
         guideTarget = target
         selected = target
+        guideAutoFocus = autoFocus
     }
 
     fun clearGuide() { guideTarget = null }
@@ -761,6 +790,25 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
     /** 按英文名查星（今夜榜单回链）。 */
     fun starByName(nameEn: String) = BrightStarCatalog.find(nameEn)
 
+    /**
+     * 按名称解析任意可聚焦天体：恒星英文名 → 梅西耶编号 → MOON / SUN / 行星键。
+     * 供深度链接（聚焦 / 百科直达）统一解析。
+     */
+    fun targetByName(name: String): CelestialTarget? {
+        if (name.isBlank()) return null
+        BrightStarCatalog.find(name)?.let { return CelestialTarget.StarTarget(it) }
+        com.celestiaview.ar.data.catalog.MessierCatalog.find(name)?.let {
+            return CelestialTarget.MessierTarget(it)
+        }
+        return when (name.uppercase()) {
+            "MOON" -> CelestialTarget.MoonTarget(frame.moonEph.raDeg, frame.moonEph.decDeg)
+            "SUN" -> CelestialTarget.SunTarget(frame.sunEph.raDeg, frame.sunEph.decDeg)
+            else -> frame.planets.firstOrNull { it.meta.key == name.uppercase() }?.let {
+                CelestialTarget.PlanetTarget(it.meta.key, it.meta.nameZh, it.eph.raDeg, it.eph.decDeg)
+            }
+        }
+    }
+
     val milkyWay get() = MilkyWayBandData
 
     companion object {
@@ -769,6 +817,18 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         /** 聚焦推进的望远视场与退出后的广角视场（度）。 */
         const val FOCUS_FOV_DEG = 18.0
         const val WIDE_FOV_DEG = 62.0
+
+        /** 退出聚焦后实拍资源释放的视场阈值（度）：贴图溶出曲线在 45° 归零。 */
+        const val EXIT_RELEASE_FOV_DEG = 45.0
+
+        /** 星座激活微光的时间常数（秒）。 */
+        const val CONSTELLATION_TAU_SEC = 1.0 / 6.0
+
+        /** 行星真实最大视角直径（度）：驱动特写贴图随视场的物理缩放。 */
+        val PLANET_ANGULAR_DIAMETER_DEG = mapOf(
+            "MERCURY" to 0.007, "VENUS" to 0.011, "MARS" to 0.011,
+            "JUPITER" to 0.011, "SATURN" to 0.0095
+        )
 
         val LABEL_DSS2 get() = AstrophotoRepository.LABEL_DSS2
 

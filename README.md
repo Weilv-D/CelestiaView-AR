@@ -50,11 +50,11 @@ release 构建启用 R8 代码压缩与资源收缩，签名凭据读取自根�
 | 观星地 | 左上角观测地名 | GPS / 手动坐标 / 六大暗夜保护区一键穿越 |
 | 罗盘微调 | 地点面板 Trim 滑块 | -30°~+30°（0.5° 步进）方位角手动微调 + 对准日月一键校准 |
 | 天体识别 | 准星对准天体 | 3.5° 内自动吸附：四角括号收缩 + HUD 抬头标签 + 触觉/音效 |
-| 天体百科 | 点击底部吸附信息行 | 遥测行 / 升降时刻 / 物理属性 / 光谱色阶 / 中西文化典故 |
-| 天体特写 | 点击吸附信息行 / 右下「聚焦」 | 视场阻尼锁定天体，浮现羽化融合的真实天文摄影作品与等宽遥测铭牌 |
-| 寻星引导 | 右上检索图标或今夜榜单点击目标 | 360° 离轴箭头 + 偏转角倒计时 + 入镜锁定脉冲 |
-| 时间机器 | 左下角时间印记或底部「时间」 | 分/时/天/月滚轮（刻度触觉）+ ±3600× 流速 + LIVE 复位 |
-| 今夜简报 | 右上月相图标 | 晨昏蒙影时间轴 / 高清月相盘 / 可见天体榜单 + 空间站过境预报 |
+| 天体百科 | 点击底部吸附信息行 | 220dp 实拍画册横幅 / 24h 高度角曲线 / 遥测行 / 升降时刻 / 物理属性 / 光谱色阶 / 中西典故 |
+| 天体特写 | 点击吸附信息行 / 右下「聚焦」 | 视场阻尼锁定 + 顶部锁定态芯片；45°→18° S 曲线浮现天球视差对齐的真实摄影贴图（角直径随视场物理缩放，滤色融进星砂）与等宽遥测铭牌 |
+| 寻星引导 | 右上检索图标或今夜榜单点击目标 | 360° 离轴箭头 + 偏转角倒计时 + 入镜锁定脉冲，到位即自动平滑变焦至天体特写 |
+| 时间机器 | 左下角时间印记或底部「时间」 | 无框光学刻度尺（中心发光指针 + 逐格触觉）+ ±3600× 流速 + LIVE 复位 |
+| 今夜简报 | 右上月相图标 | 晨昏蒙影时间轴 / 高清月相盘 / 带实拍缩略图的可见天体榜单 + 空间站过境预报 |
 | 文化星图 | 底部「星官」循环或图层面板 | 现代国际 IAU / 中国古星官（三垣二十八宿·四象配色）/ 双语融合 |
 | 图层开关 | 底部「图层」 | 网格 / 黄道 / 银河 / 星座 / 梅西耶 / 轨迹 / 空间站 / 流星雨 |
 | 护眼红光 | 底部「夜视」 | 全屏红光谱滤镜，保护暗适应 |
@@ -68,9 +68,11 @@ release 构建启用 R8 代码压缩与资源收缩，签名凭据读取自根�
 ```bash
 adb shell am start -n com.celestiaview.ar/.MainActivity \
   --es navigate detail --es target Kochab
+adb shell am start -n com.celestiaview.ar/.MainActivity \
+  --es navigate focus --es target M31 --ef fov 12
 ```
 
-`navigate` 取值：`detail` / `guide` / `tonight` / `search` / `time` / `layers` / `location` / `redlight` / `culture` / `culture_dual` / `reset`。
+`navigate` 取值：`detail` / `focus`（可附 `--ef fov` 望远视场）/ `guide` / `tonight` / `search` / `time` / `layers` / `location` / `redlight` / `culture` / `culture_dual` / `reset`；`target` 支持恒星英文名 / 梅西耶编号 / `MOON` / `SUN` / 行星键。
 
 ## 工程架构
 
@@ -86,8 +88,8 @@ com.celestiaview.ar
 │   │   ├── CelestialProjector.kt  # 针孔相机投影/背面剔除(z>0.05)/大圆弧 3° 细分
 │   │   └── SatelliteTracker.kt    # ISS/天宫圆轨道+J2 升交点进动/地影圆柱模型/过境预报
 │   ├── sensor/
-│   │   ├── AttitudeTracker.kt     # 旋转矢量→屏幕重映射→磁偏角+方位角微调→自适应 SLERP(0.08~0.35) + 1Hz 姿态遥测
-│   │   ├── OrbitTouchController.kt# 惯性轨道/指数衰减 Fling/FOV 阻尼
+│   │   ├── AttitudeTracker.kt     # 旋转矢量→屏幕重映射→磁偏角+方位角微调→自适应 SLERP(视场耦合 0.02~0.35 长焦超稳态) + 1Hz 遥测
+│   │   ├── OrbitTouchController.kt# 惯性轨道/指数衰减 Fling/FOV 阻尼/聚焦滑航（帧率无关指数因子）
 │   │   └── LocationProvider.kt    # GPS 监听 + 六大暗夜保护区 + GeomagneticField 偏角
 │   └── media/
 │       ├── ProceduralSoundEngine.kt # AudioTrack 实时合成 Cmaj9 Drone + 泛音锁定音(ADSR)
@@ -105,14 +107,17 @@ com.celestiaview.ar
 └── ui/                            # 表现层（Compose + Canvas）
     ├── theme/DeepSpaceTheme.kt    # 深空色彩体系 + 红光模式状态
     ├── render/
-    │   ├── SkyCanvasRenderer.kt   # 12 层渲染管线：星砂场/银河/星官/球面地平弧（渲染循环零分配）
-    │   ├── StarOpticsShader.kt    # B-V→黑体色 / PSF 多层光晕 / 十字衍射星芒 / 大气闪烁
+    │   ├── SkyCanvasRenderer.kt   # 12 层渲染管线：星砂场/银河/星官/球面地平弧/聚焦实拍特写（渲染循环零分配）
+    │   ├── StarOpticsShader.kt    # B-V→黑体色 / PSF 多层光晕 / 十字衍射星芒 / 八芒耀星 / 大气闪烁
+    │   ├── PlateAlignment.kt      # 贴图天球北极视差旋转角 / S 曲线溶解 / 角直径物理缩放（纯函数）
+    │   ├── AstrophotoRepository.kt# CDS Aladin hips2fits + NASA/Wikimedia 精选，内存/磁盘/内置三级缓存 + 径向羽化
+    │   ├── AstrophotoPlateGenerator.kt # 程序化高清底片（星系旋臂/月面环形山等 11 风格，离线兜底）
     │   └── MoonPhaseRenderer.kt   # 月相半圆+椭圆复合路径(盈亏分档 sweep)/地球照/月海
     ├── components/                # 无界 HUD 与面板组件
-    │   ├── TargetReticleOverlay.kt# 微光同心环准星/吸附括号/360° 引导箭头(屏幕边缘判定)/锁定脉冲
-    │   ├── TimeMachineScrubber.kt # 阻尼刻度滚轮 + 多倍速播放栏（入口为左下时间印记）
-    │   ├── CelestialDetailSheet.kt# 天体百科四模块抽屉 + 离散光谱色阶条
-    │   ├── TonightSkyGuideSheet.kt# 今夜简报：蒙影时间轴/月相盘/榜单 + 空间站过境
+    │   ├── TargetReticleOverlay.kt# 微光同心环准星/吸附括号/360° 引导箭头(屏幕边缘判定)/N-E-S-W 罗盘标/锁定脉冲
+    │   ├── TimeMachineScrubber.kt # 无框光学刻度尺（中心发光指针）+ 多倍速播放栏（入口为左下时间印记）
+    │   ├── CelestialDetailSheet.kt# 画册级实拍横幅 + 24h 高度角曲线 + 百科四模块 + 离散光谱色阶条
+    │   ├── TonightSkyGuideSheet.kt# 今夜简报：蒙影时间轴/月相盘/带实拍缩略图榜单 + 空间站过境
     │   └── SearchAndFilterModal.kt# 四分类检索 + 一键导航
     ├── SkyViewModel.kt            # 状态中枢：帧循环/时间机器/吸附/文化体系/空间站/流星雨
     ├── MainActivity.kt            # CameraX + 无界 HUD 总装 + 深度链接导航 + 手势
@@ -125,7 +130,7 @@ com.celestiaview.ar
 |---|---|
 | L1 | 大气散射天穹：黑夜 / 晨昏蒙影（太阳方位橙紫瑞利光晕）/ 暗化白昼三态 |
 | L2 | 银河银道面流光带：三层柔光描边（星尘蓝 / 淡紫蓝 / 暖星光）+ 银心径向增强 + 星尘粒子 |
-| L2.2 | 背景星砂场：固定种子 1500 颗暗星（60% 聚于银道面带），纯色点阵零 Shader 开销 |
+| L2.2 | 背景星砂场：固定种子 3000 颗四色温微星（60% 聚于银道面带，密度 3.5×），纯色点阵零 Shader 开销 |
 | L2.5 | 流星雨火流星粒子层：对象池零分配 / 辐射点向外辐射 / 电离余迹渐隐 |
 | L3 | 地平经纬网 15° / 天赤道 / 金色虚线黄道 + 十二月刻度 |
 | L3.5 | 三垣二十八宿文化层：四象配色宿线 + 篆刻菱形宿名徽章 + 金色垣墙（地下剔除） |
@@ -134,6 +139,7 @@ com.celestiaview.ar
 | L6 | 恒星 PSF：B-V 黑体色 / 3.5r 大气光晕 / m≤1.5 十字星芒 / 地平高度闪烁调制 |
 | L7 | 太阳辉光 / 月相盈亏 Terminator / 五大行星光泽球体(木星条纹/土星环)+脉冲环 |
 | L7.5 | 空间站金色太阳能翼矢量图标 + 前后 15 分钟过境弧（30s 桶缓存）+ 地影/日照状态 |
+| L7.8 | 聚焦实拍特写：天球北极视差角旋转对齐 + 角直径随视场物理缩放，45°→18° S 曲线淡入，滤色混合融进星砂，程序化底片 → 实拍交叉淡化 |
 | L8 | 选中天体 24h 运行弧线（±12h/15min 采样，整点刻度 + 时刻标注） |
 | L9 | 球面地平弧（0.8dp 微光）+ 15° 刻度针 + 45° 方位角文字 + 地下暮光渐变（地下天体 22% 透视） |
 

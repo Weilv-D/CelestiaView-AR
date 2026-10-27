@@ -1,5 +1,8 @@
 package com.celestiaview.ar.ui.components
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,17 +14,19 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -34,9 +39,11 @@ import com.celestiaview.ar.ui.theme.redLightSafe
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 /**
- * 时间机器控制台（展开态）：阻尼刻度滚轮（分/时/天/月粒度，拨动触觉反馈）+
+ * 时间机器控制台（展开态）：无框光学刻度尺（中心 1dp 纯白发光指针 +
+ * 疏密相间等宽刻度，横向拨动改写观测时刻，逐格触觉反馈）+
  * 多倍速播放栏 + 一键回今。折叠态的常驻入口是主界面左下角的时间印记。
  */
 @Composable
@@ -46,7 +53,6 @@ fun TimeMachineScrubber(
     onToggle: () -> Unit
 ) {
     if (!expanded) return
-    val haptics = LocalHapticFeedback.current
     val red = vm.redLight
     val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
 
@@ -81,57 +87,45 @@ fun TimeMachineScrubber(
                 fontSize = 14.sp,
                 style = TextStyle(fontFeatureSettings = "tnum")
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
 
-            // 粒度 + 阻尼滚轮
+            // 粒度 + 光学刻度尺
             val granularities = listOf(
                 "分钟" to 60_000L, "小时" to 3_600_000L,
                 "天" to 86_400_000L, "月" to 2_592_000_000L
             )
             var granularityIdx by remember { mutableIntStateOf(1) }
-            var sliderPos by remember { mutableFloatStateOf(0f) }
-            var lastTick by remember { mutableIntStateOf(0) }
-
             Row {
                 granularities.forEachIndexed { i, (label, _) ->
                     NakedTextButton(
                         text = label,
                         selected = i == granularityIdx,
                         redLight = red,
-                        onClick = { granularityIdx = i; sliderPos = 0f; lastTick = 0 }
+                        onClick = { granularityIdx = i }
                     )
                 }
             }
-
-            Slider(
-                value = sliderPos,
-                onValueChange = { v ->
-                    sliderPos = v
-                    val tick = (v * 12f).toInt()
-                    if (tick != lastTick) {
-                        val steps = tick - lastTick
-                        lastTick = tick
-                        vm.nudgeTime(granularities[granularityIdx].second, steps)
-                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    }
-                },
-                onValueChangeFinished = {
-                    sliderPos = 0f
-                    lastTick = 0
-                },
-                valueRange = -12f..12f,
-                steps = 23,
-                modifier = Modifier.fillMaxWidth()
+            TimeRuler(
+                accent = accent.redLightSafe(red),
+                red = red,
+                onNudge = { steps -> vm.nudgeTime(granularities[granularityIdx].second, steps) }
+            )
+            Text(
+                "横向拨动刻度尺改写观测时刻 · 每格 ±1 ${granularities[granularityIdx].first}",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.redLightSafe(red)
             )
 
             // 多倍速播放栏
+            Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth()) {
                 vm.timeRates.forEach { rate ->
                     val label = when {
                         rate == 0.0 -> "暂停"
                         rate == 1.0 -> "1×"
-                        rate == -300.0 -> "-300×"
-                        else -> "%+d×".format(rate.toInt())
+                        rate == -3600.0 -> "-1h"
+                        rate == 3600.0 -> "+1h"
+                        else -> "%+d".format(rate.toInt())
                     }
                     val active = !vm.isLive && vm.timeRate == rate
                     NakedTextButton(
@@ -147,7 +141,10 @@ fun TimeMachineScrubber(
                 }
             }
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
                 NakedTextButton(
                     text = if (vm.isLive) "已回到此刻 LIVE" else "回到此刻 LIVE",
                     selected = vm.isLive,
@@ -155,6 +152,85 @@ fun TimeMachineScrubber(
                     onClick = { vm.backToLive() }
                 )
             }
+        }
+    }
+}
+
+/**
+ * 无框光学刻度尺：中心一根 1dp 纯白发光指针，两侧 ±12 格疏密相间的等宽刻度
+ * （每 3 格主刻度），拖动逐格改写时间并伴随触觉微光反馈，无任何按钮方框。
+ */
+@Composable
+private fun TimeRuler(
+    accent: Color,
+    red: Boolean,
+    onNudge: (Int) -> Unit
+) {
+    val haptics = LocalHapticFeedback.current
+    var dragging by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .pointerInput(Unit) {
+                val stepPx = size.width / 26f
+                var acc = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { acc = 0f; dragging = true },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                    onHorizontalDrag = { _, dragAmt ->
+                        acc += dragAmt
+                        var nudged = 0
+                        while (acc >= stepPx) { acc -= stepPx; nudged++ }
+                        while (acc <= -stepPx) { acc += stepPx; nudged-- }
+                        if (nudged != 0) {
+                            onNudge(nudged)
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                    }
+                )
+            }
+    ) {
+        Canvas(Modifier.matchParentSize()) {
+            val w = size.width
+            val h = size.height
+            val cx = w / 2f
+            val midY = h * 0.56f
+            val step = w / 26f
+            // 基线
+            drawLine(
+                Color(0x22FFFFFF).redLightSafe(red),
+                Offset(0f, midY), Offset(w, midY), 0.8f.dp.toPx()
+            )
+            // ±12 格刻度：主刻度每 3 格；拖动中指针邻域刻度泛起微光
+            for (i in -12..12) {
+                if (i == 0) continue
+                val x = cx + i * step
+                val major = i % 3 == 0
+                val near = dragging && abs(x - cx) < step * 1.5f
+                val tickH = (if (major) 15f else 8f).dp.toPx()
+                val alpha = when {
+                    near -> 0.95f
+                    major -> 0.55f
+                    else -> 0.30f
+                }
+                drawLine(
+                    Color(0xFFDBE6F6).copy(alpha = alpha).redLightSafe(red),
+                    Offset(x, midY - tickH / 2), Offset(x, midY + tickH / 2),
+                    (if (major) 1.2f else 0.8f).dp.toPx()
+                )
+            }
+            // 中心指针：柔光带 + 1dp 纯白发光指针 + 顶端星点
+            drawLine(
+                Color(0xFFFFFFFF).copy(alpha = if (dragging) 0.22f else 0.14f).redLightSafe(red),
+                Offset(cx, h * 0.14f), Offset(cx, h * 0.90f), 5f.dp.toPx()
+            )
+            drawLine(
+                Color(0xFFFFFFFF).redLightSafe(red),
+                Offset(cx, h * 0.10f), Offset(cx, h * 0.94f), 1f.dp.toPx()
+            )
+            drawCircle(accent, 2.4f.dp.toPx(), Offset(cx, h * 0.10f))
         }
     }
 }

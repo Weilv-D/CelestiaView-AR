@@ -33,7 +33,9 @@ class OrbitTouchController {
     private var glideAz = Double.NaN
 
     /**
-     * 拖拽一步。[degPerPx] 由调用方按当前 FOV 与屏幕高度换算。
+     * 拖拽一步。[degPerPx] 由调用方按 degPerPx = fovY / 视口高度换算——
+     * 手势转角随视场线性降档（scale = fov/62），6° 深空微距下单像素
+     * 对应天球转角仅为 62° 广角的约 1/10，长焦构图自然放缓。
      */
     fun onDrag(dxPx: Float, dyPx: Float, degPerPxY: Double, degPerPxX: Double) {
         centerAzDeg = wrapAz(centerAzDeg + dxPx * degPerPxX)
@@ -81,9 +83,9 @@ class OrbitTouchController {
             velAz = 0.0
             velAlt = 0.0
         }
-        // 聚焦滑航：方位走最短弧
+        // 聚焦滑航：方位走最短弧；指数因子 1-e^(-dt/τ) 保证高帧率与掉帧时收敛节奏一致
         if (!glideAlt.isNaN()) {
-            val k = min(1.0, dtSec / GLIDE_TAU)
+            val k = 1.0 - exp(-dtSec / GLIDE_TAU)
             val azErr = normalizeDeg180(glideAz - centerAzDeg)
             centerAzDeg = wrapAz(centerAzDeg + azErr * k)
             centerAltDeg = clampAlt(centerAltDeg + (glideAlt - centerAltDeg) * k)
@@ -94,7 +96,7 @@ class OrbitTouchController {
         }
         val fovGap = targetFov - fovYDeg
         if (abs(fovGap) > 0.01) {
-            fovYDeg += fovGap * min(1.0, dtSec * 8.0)
+            fovYDeg += fovGap * (1.0 - exp(-dtSec / FOV_TAU))
         } else {
             fovYDeg = targetFov
         }
@@ -135,5 +137,8 @@ class OrbitTouchController {
 
         /** 聚焦滑航时间常数（秒）。 */
         const val GLIDE_TAU = 0.28
+
+        /** 视场阻尼推进时间常数（秒）：62°→18° 约 0.3s 的电影式变焦节奏。 */
+        const val FOV_TAU = 0.16
     }
 }

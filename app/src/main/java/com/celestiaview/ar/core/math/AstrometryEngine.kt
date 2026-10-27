@@ -330,6 +330,29 @@ object AstrometryEngine {
     // 工具
     // ------------------------------------------------------------------
 
+    /**
+     * 目标在 [dayStartMillis, dayStartMillis + 24h) 内的地平高度采样曲线
+     * （默认 49 点，半小时步进），供详情抽屉的高度角可视化图表使用。
+     * 目标赤经赤纬取常数（月球 13°/日 的漂移在半小时粒度下可忽略）。
+     */
+    fun altitudeCurve24h(
+        raDeg: Double,
+        decDeg: Double,
+        latitudeDeg: Double,
+        longitudeEastDeg: Double,
+        dayStartMillis: Long,
+        steps: Int = 49
+    ): DoubleArray {
+        val out = DoubleArray(steps)
+        val stepMs = MS_PER_DAY.toLong() / (steps - 1)
+        for (i in 0 until steps) {
+            val jd = julianDate(dayStartMillis + i * stepMs)
+            val lst = lstDeg(jd, longitudeEastDeg)
+            out[i] = equatorialToHorizontal(raDeg, decDeg, lst, latitudeDeg).altDeg
+        }
+        return out
+    }
+
     /** 归一化到 [0, 360)。 */
     fun normalizeDeg(deg: Double): Double {
         var d = deg % 360.0

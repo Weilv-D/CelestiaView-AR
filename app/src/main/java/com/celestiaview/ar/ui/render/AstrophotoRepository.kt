@@ -18,14 +18,16 @@ import kotlin.math.PI
 /** 程序化底片风格（网络实拍图未就绪时的兜底底片）。 */
 enum class PlateStyle { GALAXY, NEBULA, OPEN_CLUSTER, GLOBULAR_CLUSTER, PLANETARY_NEBULA, SUPERNOVA_REMNANT, JUPITER, SATURN, MOON, SUN, STAR_FIELD }
 
-/** 一次天体摄影请求：缓存键 + 巡天坐标 + 兜底底片风格 + 实拍源标注。 */
+/** 一次天体摄影请求：缓存键 + 巡天坐标 + 兜底底片风格 + 实拍源标注 + 真实角直径（度）。 */
 data class AstroRequest(
     val key: String,
     val raDeg: Double,
     val decDeg: Double,
     val fovDeg: Double,
     val plateStyle: PlateStyle,
-    val sourceLabel: String
+    val sourceLabel: String,
+    /** 天体真实角直径（度），驱动贴图随视场的物理缩放；巡天切片即切片视场。 */
+    val angularDiameterDeg: Double = 0.0
 )
 
 /**
@@ -79,6 +81,16 @@ class AstrophotoRepository(context: Context) {
     private fun assetBytes(key: String): ByteArray? = runCatching {
         appContext.assets.open("astrophotos/$key.jpg").use { it.readBytes() }
     }.getOrNull()
+
+    /**
+     * 缩略图快速通道（今夜简报等列表场景）：仅内存 / 内置 assets / 磁盘缓存，
+     * 绝不发起网络请求；未命中返回 null 由调用方以矢量符号兜底。
+     */
+    suspend fun loadCachedThumbnail(key: String): Bitmap? = withContext(Dispatchers.IO) {
+        memoryCache.get(key)?.let { return@withContext it }
+        decodeFeathered(assetBytes(key))
+            ?: decodeFeathered(diskBytes(key))?.also { memoryCache.put(key, it) }
+    }
 
     private fun diskBytes(key: String): ByteArray? {
         val f = cacheFileOf(key)
@@ -193,9 +205,10 @@ class AstrophotoRepository(context: Context) {
         fun curatedUrlFor(key: String): String? = CURATED[key]?.first
         fun curatedLabelFor(key: String): String? = CURATED[key]?.second
 
-        /** 内置离线首发贴图键（assets 下 astrophotos 目录）。 */
+        /** 内置离线首发贴图键（assets 下 astrophotos 目录，14 张核心天体）。 */
         val BUNDLED_KEYS = setOf(
-            "M31", "M42", "M45", "M1", "JUPITER", "SATURN", "MOON", "SUN", "SIRIUS", "UMA"
+            "M31", "M42", "M45", "M1", "M13", "M51", "M57",
+            "JUPITER", "SATURN", "MARS", "MOON", "SUN", "SIRIUS", "UMA"
         )
 
         /**

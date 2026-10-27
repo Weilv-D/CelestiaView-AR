@@ -1,11 +1,8 @@
 package com.celestiaview.ar.ui.components
 
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,25 +19,31 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.celestiaview.ar.core.math.AstrometryEngine
 import com.celestiaview.ar.core.math.PlanetaryEphemeris
 import com.celestiaview.ar.data.model.CelestialTarget
+import com.celestiaview.ar.data.model.DsoType
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.render.StarOpticsShader
 import com.celestiaview.ar.ui.theme.CelestialPalette
@@ -52,8 +55,12 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+/** 抽屉深邃底色：实拍横幅底缘溶入的目标色。 */
+private val SheetDeepColor = Color(0xF2050914)
+
 /**
- * 天体百科详情抽屉：实时遥测仪表盘 + 今日升降时刻 + 物理属性网格 + 光谱色温条 + 中西文化典故。
+ * 天体百科详情抽屉：画册级实拍横幅 + 实时遥测仪表盘 + 24h 高度角曲线 +
+ * 今日升降时刻 + 物理属性网格 + 光谱色温条 + 中西文化典故。
  */
 @Composable
 fun CelestialDetailSheet(
@@ -64,61 +71,51 @@ fun CelestialDetailSheet(
     val red = vm.redLight
     val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
     val f = vm.frame
-    // 遥测数值降频刷新（~5Hz 足够），避免抽屉以 60fps 全量重组拖垮低端图形栈
-    val tick = vm.frameTick / 12
 
-    GlassPanel(
+    Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp),
-        cornerRadius = 26.dp,
-        redLight = red
+            .heightIn(max = 660.dp) // 浮层抽屉：内容超高时内部滚动，底部让出船坞
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 96.dp)
     ) {
-        Column(
-            Modifier
-                .padding(16.dp)
-                .heightIn(max = 640.dp) // 内容超高时内部滚动，防止整抽屉把底部控件顶出屏幕
-                .verticalScroll(rememberScrollState())
-        ) {
-            // ---------- 高清实拍画幅（程序化底片 → 真实摄影交叉淡化） ----------
-            AstrophotoHeader(vm, red)
+        // ---------- 沉浸式实拍大图横幅（底部溶入抽屉深邃背景） ----------
+        AstrophotoHeader(vm, target, red)
 
-            // ---------- 标题行 ----------
+        Column(Modifier.padding(start = 18.dp, end = 18.dp, bottom = 18.dp)) {
+            // ---------- 操作行 ----------
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        target.displayName,
-                        style = CelestialType.HeroTitle.copy(
-                            color = CelestialPalette.TextPrimary.redLightSafe(red)
-                        )
-                    )
-                    Spacer(Modifier.height(3.dp))
-                    subtitleOf(target)?.let {
-                        Text(
-                            it.uppercase(),
-                            style = CelestialType.LatinSubtitle.copy(
-                                color = CelestialPalette.AccentCyan.redLightSafe(red)
-                            )
-                        )
-                    }
-                }
                 NakedTextButton(
                     text = "寻星引导",
                     selected = vm.guideTarget == target,
                     redLight = red
                 ) { vm.startGuide(target) }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.weight(1f))
                 IconButton(onClick = onDismiss) {
                     Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
-            // ---------- 实时遥测 ----------
+            // ---------- 今日可见性：24h 高度角曲线（紧随横幅，处于抽屉首屏） ----------
             val hz = AstrometryEngine.equatorialToHorizontal(
                 target.raDeg, target.decDeg, f.lstDeg, f.latitudeDeg
             )
+            val dayStart = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val rts = AstrometryEngine.riseTransitSet(
+                target.raDeg, target.decDeg, f.latitudeDeg, dayStart, f.longitudeEastDeg,
+                h0Deg = if (target is CelestialTarget.SunTarget) AstrometryEngine.H0_SUN_DEG
+                else AstrometryEngine.H0_STAR_DEG
+            )
+            AltitudeCurve24hChart(vm, target, rts, dayStart, hz.altDeg, red)
+
+            Spacer(Modifier.height(14.dp))
+
+            // ---------- 实时遥测 ----------
             val hourAngle = AstrometryEngine.normalizeDeg180(f.lstDeg - target.raDeg)
             SectionTitle("实时遥测 TELEMETRY", accent.redLightSafe(red))
             TelemetryGrid(
@@ -147,17 +144,8 @@ fun CelestialDetailSheet(
 
             Spacer(Modifier.height(14.dp))
 
-            // ---------- 今日可见性 ----------
+            // ---------- 今日可见性：升降中天时刻（曲线见抽屉首屏） ----------
             SectionTitle("今日可见性 VISIBILITY", accent.redLightSafe(red))
-            val dayStart = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-            }.timeInMillis
-            val rts = AstrometryEngine.riseTransitSet(
-                target.raDeg, target.decDeg, f.latitudeDeg, dayStart, f.longitudeEastDeg,
-                h0Deg = if (target is CelestialTarget.SunTarget) AstrometryEngine.H0_SUN_DEG
-                else AstrometryEngine.H0_STAR_DEG
-            )
             val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
             when {
                 rts.circumpolar -> Text("拱极星 · 今夜永不落下（最高 %.1f°）".format(rts.transitMaxAltDeg),
@@ -237,17 +225,9 @@ fun CelestialDetailSheet(
                 }
                 is CelestialTarget.MessierTarget -> {
                     val o = target.dso
-                    val typeName = when (o.type) {
-                        com.celestiaview.ar.data.model.DsoType.GALAXY -> "星系"
-                        com.celestiaview.ar.data.model.DsoType.NEBULA -> "星云"
-                        com.celestiaview.ar.data.model.DsoType.GLOBULAR_CLUSTER -> "球状星团"
-                        com.celestiaview.ar.data.model.DsoType.OPEN_CLUSTER -> "疏散星团"
-                        com.celestiaview.ar.data.model.DsoType.PLANETARY_NEBULA -> "行星状星云"
-                        com.celestiaview.ar.data.model.DsoType.SUPERNOVA_REMNANT -> "超新星遗迹"
-                    }
                     TelemetryGrid(
                         listOf(
-                            "类型" to typeName,
+                            "类型" to dsoTypeName(o.type),
                             "视星等" to "%.1f".format(o.mag),
                             "视直径" to "%.0f′".format(o.majorAxisArcmin),
                             "距离" to if (o.distanceKly >= 1000) "%.1f 百万光年".format(o.distanceKly / 1000)
@@ -285,57 +265,240 @@ fun CelestialDetailSheet(
 }
 
 // ----------------------------------------------------------------------
-// 辅助
+// 画册级横幅与 24h 高度曲线
 // ----------------------------------------------------------------------
 
 /**
- * 详情抽屉顶部高清实拍画幅：径向羽化后的真实天体摄影（未就绪时程序化底片），
- * 圆形画幅 + 右下角拍摄源标注（NASA / HST / DSS2 Optical Survey）。
+ * 顶部沉浸式实拍横幅：220dp 高清实拍（未就绪时程序化底片）铺满抽屉首屏，
+ * 底缘以垂直渐变溶入抽屉深邃底色；左下角叠加无框双语天体名、分类徽章
+ * 与摄影信源角标（NASA / HST / DSS2 Optical Survey）。
  */
 @Composable
-private fun AstrophotoHeader(vm: SkyViewModel, red: Boolean) {
-    val plate = vm.focusPlate ?: return
+private fun AstrophotoHeader(vm: SkyViewModel, target: CelestialTarget, red: Boolean) {
+    val plate = vm.focusPlate
     val photo = vm.focusPhoto
-    val label = vm.focusRequest?.let { req ->
-        if (photo != null) req.sourceLabel else "程序化底片 · 实拍加载中"
-    } ?: return
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(190.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(CelestialPalette.ZenithNight.redLightSafe(red)),
-        contentAlignment = Alignment.Center
-    ) {
-        Image(
-            bitmap = plate,
-            contentDescription = null,
-            contentScale = ContentScale.FillHeight,
-            modifier = Modifier.fillMaxHeight()
-        )
-        if (photo != null) {
-            val fade by animateFloatAsState(targetValue = vm.focusCrossfade, label = "photoFade")
+    val sourceLabel = vm.focusRequest?.let { req ->
+        if (photo != null) req.sourceLabel.uppercase(Locale.US) else "程序化底片 · 实拍加载中"
+    } ?: "OPTICAL SURVEY · DSS2 / NASA HST"
+
+    Box(Modifier.fillMaxWidth().height(220.dp)) {
+        if (plate != null) {
             Image(
-                bitmap = photo,
+                bitmap = plate,
                 contentDescription = null,
-                contentScale = ContentScale.FillHeight,
-                modifier = Modifier.fillMaxHeight().alpha(fade)
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
             )
+            if (photo != null) {
+                // 聚焦交叉淡化由帧循环以固定速率推进（1.4/s），直读即得丝滑淡入，
+                // 不再叠加弹簧动画的双层迟滞
+                Image(
+                    bitmap = photo,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize().alpha(vm.focusCrossfade)
+                )
+            }
+        } else {
+            Box(Modifier.matchParentSize().background(SheetDeepColor))
         }
-        Text(
-            label,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 10.dp, bottom = 8.dp),
-            fontSize = 9.sp,
-            letterSpacing = 0.8.sp,
-            style = CelestialType.Tnum.copy(
-                color = Color(0xCCE8C96A).redLightSafe(red)
+
+        // 底缘溶接渐变：照片边界消失于抽屉底色（尺寸驱动的有限区间渐变）
+        val bannerBg = SheetDeepColor.redLightSafe(red)
+        Box(
+            Modifier
+                .matchParentSize()
+                .drawBehind {
+                    drawRect(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                bannerBg.copy(alpha = 0.55f),
+                                bannerBg
+                            ),
+                            startY = size.height * 0.42f,
+                            endY = size.height * 0.98f
+                        )
+                    )
+                }
+        )
+
+        // 左下角：双语名 + 分类徽章 + 摄影信源角标
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 18.dp, end = 18.dp, bottom = 12.dp)
+        ) {
+            Text(
+                target.displayName,
+                style = CelestialType.HeroTitle.copy(
+                    color = CelestialPalette.TextPrimary.redLightSafe(red)
+                )
             )
+            subtitleOf(target)?.let {
+                Text(
+                    it.uppercase(),
+                    style = CelestialType.LatinSubtitle.copy(
+                        color = CelestialPalette.AccentCyan.redLightSafe(red)
+                    )
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    classificationOf(target),
+                    modifier = Modifier
+                        .background(
+                            Color(0x337DD3FC).redLightSafe(red),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp,
+                    color = Color(0xFFDBEAFE).redLightSafe(red)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    sourceLabel,
+                    style = CelestialType.Tnum.copy(
+                        color = Color(0xCCE8C96A).redLightSafe(red)
+                    ),
+                    fontSize = 9.sp,
+                    letterSpacing = 0.8.sp
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+/** 天体分类徽章文案。 */
+private fun classificationOf(target: CelestialTarget): String = when (target) {
+    is CelestialTarget.StarTarget -> "${target.star.spectral} 型恒星"
+    is CelestialTarget.PlanetTarget -> "行星"
+    is CelestialTarget.MoonTarget -> "天然卫星"
+    is CelestialTarget.SunTarget -> "G2V 主序星"
+    is CelestialTarget.MessierTarget -> dsoTypeName(target.dso.type)
+}
+
+private fun dsoTypeName(type: DsoType): String = when (type) {
+    DsoType.GALAXY -> "星系"
+    DsoType.NEBULA -> "星云"
+    DsoType.GLOBULAR_CLUSTER -> "球状星团"
+    DsoType.OPEN_CLUSTER -> "疏散星团"
+    DsoType.PLANETARY_NEBULA -> "行星状星云"
+    DsoType.SUPERNOVA_REMNANT -> "超新星遗迹"
+}
+
+/**
+ * 今日 24 小时地平高度角曲线：0° 地平虚线、升起（绿）/ 中天（金）/ 落下（橙）
+ * 时刻节点，以及代表“此刻位置”的发光星点。
+ * 采样在目标 / 站点 / 日期变化时重算一次，绘制零分配。
+ */
+@Composable
+private fun AltitudeCurve24hChart(
+    vm: SkyViewModel,
+    target: CelestialTarget,
+    rts: AstrometryEngine.RiseTransitSet,
+    dayStartMillis: Long,
+    nowAltDeg: Double,
+    red: Boolean
+) {
+    val f = vm.frame
+    val samples = remember(
+        target.raDeg, target.decDeg, f.latitudeDeg, f.longitudeEastDeg, dayStartMillis
+    ) {
+        AstrometryEngine.altitudeCurve24h(
+            target.raDeg, target.decDeg, f.latitudeDeg, f.longitudeEastDeg, dayStartMillis
         )
     }
-    Spacer(Modifier.height(12.dp))
+    val curveColor = (if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF7DD3FC))
+        .redLightSafe(red)
+    val riseColor = DeepSpacePalette.RiseGreen.redLightSafe(red)
+    val setColor = DeepSpacePalette.SetOrange.redLightSafe(red)
+    val transitColor = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFFF5C543)
+    val gridColor = Color(0x3DFFFFFF).redLightSafe(red)
+    val nowColor = Color(0xFFF8FAFC).redLightSafe(red)
+
+    Canvas(Modifier.fillMaxWidth().height(112.dp)) {
+        val w = size.width
+        val h = size.height
+        val altMin = -25f
+        val altMax = 85f
+        fun yOf(altDeg: Double): Float = h * (
+            1f - ((altDeg.toFloat() - altMin) / (altMax - altMin)).coerceIn(0f, 1f)
+        )
+        fun xOf(millis: Long): Float =
+            w * ((millis - dayStartMillis).toFloat() / 86_400_000f)
+
+        // 30° 仰角参考细线 + 0° 地平虚线
+        drawLine(
+            gridColor, Offset(0f, yOf(30.0)), Offset(w, yOf(30.0)), 0.6f.dp.toPx()
+        )
+        drawLine(
+            gridColor,
+            Offset(0f, yOf(0.0)), Offset(w, yOf(0.0)), 0.8f.dp.toPx(),
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(7f, 7f))
+        )
+
+        // 高度角曲线
+        val path = Path()
+        val last = samples.size - 1
+        for (i in samples.indices) {
+            val x = w * i / last.toFloat()
+            val y = yOf(samples[i])
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, curveColor.copy(alpha = 0.92f), style = Stroke(1.7f.dp.toPx()))
+
+        // 升起 / 中天 / 落下节点（时间细节由下方遥测网格给出）
+        fun markAt(millis: Long?, color: Color) {
+            if (millis == null) return
+            val x = xOf(millis)
+            if (x < 0f || x > w) return
+            val y = yOf(samples[((x / w) * last).toInt().coerceIn(0, last)])
+            drawLine(color, Offset(x, h * 0.82f), Offset(x, y - 6f.dp.toPx()), 1f.dp.toPx())
+            drawCircle(color, 2.6f.dp.toPx(), Offset(x, y))
+        }
+        markAt(rts.riseMillis, riseColor)
+        markAt(rts.setMillis, setColor)
+        rts.transitMillis?.let { tx ->
+            val x = xOf(tx)
+            if (x in 0f..w) {
+                val y = yOf(rts.transitMaxAltDeg)
+                drawLine(transitColor, Offset(x, h * 0.82f), Offset(x, y - 6f.dp.toPx()), 1f.dp.toPx())
+                drawCircle(transitColor, 2.6f.dp.toPx(), Offset(x, y))
+            }
+        }
+
+        // 此刻：发光星点（径向渐变显式有限 center/radius，兼容软件图形栈）
+        val nowX = xOf(f.simTimeMillis).coerceIn(0f, w)
+        val nowY = yOf(nowAltDeg)
+        val glowR = (13f.dp.toPx()).coerceIn(2f, 600f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(nowColor.copy(alpha = 0.45f), Color.Transparent),
+                center = Offset(nowX, nowY),
+                radius = glowR
+            ),
+            radius = glowR,
+            center = Offset(nowX, nowY)
+        )
+        drawCircle(nowColor, 3.1f.dp.toPx(), Offset(nowX, nowY))
+        drawCircle(Color(0xFF0A1220), 1.4f.dp.toPx(), Offset(nowX, nowY))
+    }
+    Text(
+        "高度角 24H ALTITUDE",
+        fontSize = 9.sp, letterSpacing = 0.8.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.redLightSafe(red),
+        modifier = Modifier.padding(top = 2.dp)
+    )
 }
+
+// ----------------------------------------------------------------------
+// 辅助
+// ----------------------------------------------------------------------
 
 @Composable
 private fun SectionTitle(t: String, color: androidx.compose.ui.graphics.Color) {

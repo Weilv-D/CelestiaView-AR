@@ -80,7 +80,17 @@ class AstrophotoRepositoryTest {
 
     @Test
     fun `内置离线首发贴图覆盖核心天体`() {
-        val expected = setOf("M31", "M42", "M45", "M1", "JUPITER", "SATURN", "MOON", "SUN", "SIRIUS", "UMA")
+        val expected = setOf(
+            "M31", "M42", "M45", "M1", "M13", "M51", "M57",
+            "JUPITER", "SATURN", "MARS", "MOON", "SUN", "SIRIUS", "UMA"
+        )
         assertEquals(expected, AstrophotoRepository.BUNDLED_KEYS)
+        // 任务要求的核心 12 天体全部内置：月木土火日 + M31/M42/M45/M1/M13/M51/M57
+        val coreTwelve = setOf(
+            "MOON", "JUPITER", "SATURN", "MARS", "SUN",
+            "M31", "M42", "M45", "M1", "M13", "M51", "M57"
+        )
+        assertTrue("核心天体缺内置图：${coreTwelve - AstrophotoRepository.BUNDLED_KEYS}",
+            AstrophotoRepository.BUNDLED_KEYS.containsAll(coreTwelve))
     }
 }

@@ -19,6 +19,8 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -67,7 +69,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -236,14 +237,22 @@ private fun SkyApp(
         activity?.navBus?.collect { intent ->
             when (intent.getStringExtra("navigate")) {
                 "detail" -> {
-                    vm.starByName(intent.getStringExtra("target") ?: "")?.let {
-                        vm.focusOn(com.celestiaview.ar.data.model.CelestialTarget.StarTarget(it))
+                    vm.targetByName(intent.getStringExtra("target") ?: "")?.let {
+                        vm.focusOn(it)
                         showDetail = true
                     }
                 }
+                // 聚焦直达：focus + target（可选 fov 浮点参数驱动望远视场）
+                "focus" -> {
+                    vm.targetByName(intent.getStringExtra("target") ?: "")?.let {
+                        vm.focusOn(it)
+                        val fov = intent.getFloatExtra("fov", -1f)
+                        if (fov > 0) vm.orbit.zoomTo(fov.toDouble())
+                    }
+                }
                 "guide" -> {
-                    vm.starByName(intent.getStringExtra("target") ?: "")?.let {
-                        vm.startGuide(com.celestiaview.ar.data.model.CelestialTarget.StarTarget(it))
+                    vm.targetByName(intent.getStringExtra("target") ?: "")?.let {
+                        vm.startGuide(it)
                     }
                 }
                 "tonight" -> showTonight = true
@@ -354,6 +363,12 @@ private fun SkyApp(
             if (renderer.consumeGuideLockEvent()) {
                 vm.haptics.lockPulse()
                 if (vm.soundOn) vm.soundEngine.playLockChime()
+                // 寻星箭头到位：自动平滑变焦至天体特写（今夜简报“到位即特写”链路）
+                if (vm.guideAutoFocus) {
+                    vm.guideAutoFocus = false
+                    val g = vm.guideTarget
+                    if (g != null && !vm.focusMode) vm.focusOn(g)
+                }
             }
         }
     }
@@ -537,6 +552,33 @@ private fun SkyApp(
                 color = accent.redLightSafe(red),
                 style = TextStyle(shadow = HudTextShadow)
             )
+        }
+
+        // ---------------- 聚焦锁定态：无框微光状态条（目标锚定 + 解除） ----------------
+        if (vm.focusMode) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .hudSafeInsets()
+                    .padding(top = 44.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "已锁定 · ${vm.selected?.displayName ?: ""}",
+                    fontSize = 11.sp,
+                    letterSpacing = 0.6.sp,
+                    color = Color(0xCC7DD3FC).redLightSafe(red),
+                    style = TextStyle(shadow = HudTextShadow)
+                )
+                Text(
+                    " · 解除",
+                    modifier = Modifier.clickable { vm.exitFocus() },
+                    fontSize = 11.sp,
+                    letterSpacing = 0.6.sp,
+                    color = Color(0x8F9AB2D6).redLightSafe(red),
+                    style = TextStyle(shadow = HudTextShadow)
+                )
+            }
         }
 
         // ---------------- 左上角：无框天文台信息流 ----------------
@@ -828,14 +870,16 @@ private fun SkyApp(
             }
         }
 
-        // ---------------- 抽屉层：独立覆盖，不挤占底部控件 ----------------
-        if (showDetail && vm.selected != null) {
-            ModalBottomSheet(
-                onDismissRequest = { vm.select(null); showDetail = false },
-                containerColor = Color.Transparent
-            ) {
-                CelestialDetailSheet(vm) { vm.select(null); showDetail = false }
-            }
+        // ---------------- 抽屉层：应用内浮层（与主界面同窗，暗色导航栏保持） ----------------
+        AnimatedVisibility(
+            visible = showDetail && vm.selected != null,
+            enter = fadeIn(tween(240)) +
+                slideInVertically(tween(300, easing = FastOutSlowInEasing)) { it / 3 },
+            exit = fadeOut(tween(200)) +
+                slideOutVertically(tween(240, easing = FastOutSlowInEasing)) { it / 3 },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            CelestialDetailSheet(vm) { vm.select(null); showDetail = false }
         }
         Column(
             Modifier
@@ -844,28 +888,35 @@ private fun SkyApp(
                 .hudSafeInsets()
                 .padding(bottom = 150.dp) // 让出底部印记与船坞
         ) {
+            // 面板过渡统一缓动：FastOutSlowIn + 240/280ms，杜绝生硬直切
             AnimatedVisibility(
                 visible = showTonight,
-                enter = fadeIn() + slideInVertically { it / 2 },
-                exit = fadeOut() + slideOutVertically { it / 2 }
+                enter = fadeIn(tween(240)) + slideInVertically(tween(280, easing = FastOutSlowInEasing)) { it / 2 },
+                exit = fadeOut(tween(200)) + slideOutVertically(tween(240, easing = FastOutSlowInEasing)) { it / 2 }
             ) {
                 TonightSkyGuideSheet(vm, { showTonight = false }) { t ->
-                    vm.startGuide(t); showTonight = false
+                    vm.startGuide(t, autoFocus = true); showTonight = false
                 }
             }
             AnimatedVisibility(
                 visible = showSearch,
-                enter = fadeIn() + slideInVertically { it / 2 },
-                exit = fadeOut() + slideOutVertically { it / 2 }
+                enter = fadeIn(tween(240)) + slideInVertically(tween(280, easing = FastOutSlowInEasing)) { it / 2 },
+                exit = fadeOut(tween(200)) + slideOutVertically(tween(240, easing = FastOutSlowInEasing)) { it / 2 }
             ) {
                 SearchAndFilterModal(vm, { showSearch = false }) { t ->
                     vm.startGuide(t); showSearch = false
                 }
             }
-            AnimatedVisibility(visible = showLocation, enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(
+                visible = showLocation,
+                enter = fadeIn(tween(240)), exit = fadeOut(tween(200))
+            ) {
                 LocationPickerPanel(vm, red) { showLocation = false }
             }
-            AnimatedVisibility(visible = showLayers, enter = fadeIn(), exit = fadeOut()) {
+            AnimatedVisibility(
+                visible = showLayers,
+                enter = fadeIn(tween(240)), exit = fadeOut(tween(200))
+            ) {
                 LayerSettingsPanel(vm, red, onCapture = { captureSnapshot() },
                     onOpenLocation = { showLocation = true }) { showLayers = false }
             }

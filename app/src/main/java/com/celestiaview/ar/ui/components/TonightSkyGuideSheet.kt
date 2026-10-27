@@ -1,8 +1,8 @@
 package com.celestiaview.ar.ui.components
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -24,12 +25,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.celestiaview.ar.core.math.AstrometryEngine
 import com.celestiaview.ar.data.model.CelestialTarget
+import com.celestiaview.ar.data.model.TonightEvent
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.render.MoonPhaseRenderer
 import com.celestiaview.ar.ui.theme.DeepSpacePalette
@@ -168,7 +177,7 @@ fun TonightSkyGuideSheet(
             // 榜单计算包含 110 个梅西耶天体解算与 24h 卫星过境扫描（约数十毫秒），
             // 仅在面板进入组合时计算一次；直接写在组合体内会随 60fps 重组每帧重算
             val events = remember { vm.tonightHighlights() }
-            LazyColumn(Modifier.height(240.dp)) {
+            LazyColumn(Modifier.height(352.dp)) {
                 items(events) { ev ->
                     Row(
                         Modifier
@@ -176,9 +185,11 @@ fun TonightSkyGuideSheet(
                             .clickable {
                                 onGuide(eventToTarget(vm, ev))
                             }
-                            .padding(vertical = 7.dp, horizontal = 4.dp),
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        AstroThumb(vm, ev, accent.redLightSafe(red))
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(ev.title, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                                 color = MaterialTheme.colorScheme.onSurface.redLightSafe(red))
@@ -244,4 +255,71 @@ private fun eventToTarget(vm: SkyViewModel, ev: com.celestiaview.ar.data.model.T
                 ?.let { CelestialTarget.MessierTarget(it) }
         else -> null
     } ?: CelestialTarget.PlanetTarget("MOON", "月球", ev.raDeg, ev.decDeg)
+}
+
+/** 条目 → 内置实拍图库键（无内置图的天体返回 null，以矢量符号兜底）。 */
+private fun thumbKeyFor(ev: TonightEvent): String? = when (ev.kind) {
+    TonightEvent.Kind.PLANET ->
+        if (ev.targetKey in AstroThumbKeys) ev.targetKey else null
+    TonightEvent.Kind.MESSIER ->
+        if (ev.targetKey in AstroThumbKeys) ev.targetKey else null
+    TonightEvent.Kind.STAR ->
+        if (ev.targetKey.equals("Sirius", true)) "SIRIUS" else null
+    else -> null
+}
+
+/** 内置图库中适合做缩略图的键（MOON / SUN 不出现在榜单，行星与经典深空）。 */
+private val AstroThumbKeys = setOf(
+    "M31", "M42", "M45", "M1", "M13", "M51", "M57", "JUPITER", "SATURN", "MARS"
+)
+
+/**
+ * 条目左侧 44dp 圆形羽化实拍缩略图：异步读取内置图库（内存 → assets → 磁盘），
+ * 绝不发起网络；未内置的天体回退为四芒矢量星徽，列表滚动零卡顿。
+ */
+@Composable
+private fun AstroThumb(vm: SkyViewModel, ev: TonightEvent, accent: Color) {
+    val key = thumbKeyFor(ev)
+    var bmp by remember(key) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(key) {
+        bmp = key?.let { vm.astroRepo.loadCachedThumbnail(it)?.asImageBitmap() }
+    }
+    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+        val loaded = bmp
+        if (loaded != null) {
+            Image(
+                bitmap = loaded,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+            )
+        } else {
+            Canvas(Modifier.size(44.dp)) {
+                val c = Offset(size.width / 2f, size.height / 2f)
+                val r = 6f.dp.toPx()
+                // 四芒星徽（实拍图未内置时的矢量兜底）
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(accent.copy(alpha = 0.22f), Color.Transparent),
+                        center = c,
+                        radius = (r * 2.6f).coerceIn(2f, 600f)
+                    ),
+                    radius = r * 2.6f,
+                    center = c
+                )
+                drawLine(accent, Offset(c.x - r * 2f, c.y), Offset(c.x + r * 2f, c.y), 0.9f.dp.toPx())
+                drawLine(accent, Offset(c.x, c.y - r * 2f), Offset(c.x, c.y + r * 2f), 0.9f.dp.toPx())
+                drawLine(
+                    accent.copy(alpha = 0.6f),
+                    Offset(c.x - r, c.y - r), Offset(c.x + r, c.y + r), 0.7f.dp.toPx()
+                )
+                drawLine(
+                    accent.copy(alpha = 0.6f),
+                    Offset(c.x - r, c.y + r), Offset(c.x + r, c.y - r), 0.7f.dp.toPx()
+                )
+                drawCircle(Color(0xFFF8FAFC), 1.6f.dp.toPx(), c)
+            }
+        }
+    }
 }

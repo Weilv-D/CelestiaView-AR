@@ -13,7 +13,8 @@ import com.celestiaview.ar.core.math.Vec3
 
 /**
  * 姿态解算器：TYPE_ROTATION_VECTOR → 屏幕旋转重映射 → 真北磁偏角校准 →
- * 四元数半球对齐 + 自适应 SLERP 平滑（慢速 0.08 防抖 / 快速 0.35 跟手）。
+ * 四元数半球对齐 + 自适应 SLERP 平滑（慢速防抖 / 快速跟手，且随视场耦合：
+ * 窄视场长焦下平滑系数自动进入超稳态区间，模拟赤道仪液压阻尼）。
  *
  * 输出世界(ENU 真北)→相机(屏幕) 四元数，直接喂给 [com.celestiaview.ar.core.math.CelestialProjector.setAttitude]。
  */
@@ -43,6 +44,10 @@ class AttitudeTracker(context: Context) : SensorEventListener {
 
     /** 供自适应平滑的角速度阈值。 */
     var fastAngularSpeedDegPerSec: Double = 40.0
+
+    /** 当前垂直视场（度），由渲染层每帧回写；驱动平滑系数的视场耦合降档。 */
+    @Volatile
+    var viewFovDeg: Double = 62.0
 
     var listener: Listener? = null
 
@@ -112,13 +117,16 @@ class AttitudeTracker(context: Context) : SensorEventListener {
         val worldToScreen = corrected.transpose()
         var qRaw = Quaternion.fromRotationMatrix(worldToScreen)
 
-        // 5) 半球对齐 + 自适应 SLERP
+        // 5) 半球对齐 + 自适应 SLERP（平滑系数随视场耦合：长焦窄视场进入超稳态）
         qRaw = qRaw.alignedHemisphereWith(qSmoothed)
         val angularSpeed = if (dt > 0) qRaw.angleToDeg(qSmoothed) / dt else 0.0
+        val stable = stableAlphaFor(viewFovDeg)
         smoothAlpha = when {
-            angularSpeed > fastAngularSpeedDegPerSec -> FAST_ALPHA
-            angularSpeed > fastAngularSpeedDegPerSec * 0.35 -> 0.20
-            else -> SLOW_ALPHA
+            angularSpeed > fastAngularSpeedDegPerSec ->
+                if (viewFovDeg < STABLE_FOV_DEG) FAST_ALPHA * 0.6 else FAST_ALPHA
+            angularSpeed > fastAngularSpeedDegPerSec * 0.35 ->
+                (stable * 2.5).coerceAtMost(0.20)
+            else -> stable
         }
         qSmoothed = if (dt <= 0) qRaw else qSmoothed.slerp(qRaw, smoothAlpha)
 
@@ -148,5 +156,24 @@ class AttitudeTracker(context: Context) : SensorEventListener {
         const val SLOW_ALPHA = 0.08
         const val FAST_ALPHA = 0.35
         const val TAG = "AttitudeTracker"
+
+        /** 视场低于该值时平滑系数开始进入超稳态降档（度）。 */
+        const val STABLE_FOV_DEG = 25.0
+
+        /** 超稳态下限视场与下限系数：≤5° 深空微距时平滑系数压到 0.02。 */
+        const val MIN_STABLE_FOV_DEG = 5.0
+        const val MIN_STABLE_ALPHA = 0.02
+
+        /**
+         * 稳态平滑系数随视场线性降档：62° 广角 0.08（常规防抖），
+         * 25°→5° 区间自 0.08 平滑压至 0.02（望远镜赤道仪级液压阻尼，
+         * 消除长焦下手部生理微颤的放大抖动）。
+         */
+        fun stableAlphaFor(fovDeg: Double): Double {
+            if (fovDeg >= STABLE_FOV_DEG) return SLOW_ALPHA
+            val t = ((STABLE_FOV_DEG - fovDeg) /
+                (STABLE_FOV_DEG - MIN_STABLE_FOV_DEG)).coerceIn(0.0, 1.0)
+            return SLOW_ALPHA - t * (SLOW_ALPHA - MIN_STABLE_ALPHA)
+        }
     }
 }
