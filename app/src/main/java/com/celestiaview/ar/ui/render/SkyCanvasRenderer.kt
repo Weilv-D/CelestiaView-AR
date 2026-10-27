@@ -42,15 +42,16 @@ private fun CelestialProjector.proj(v: Vec3): Offset? =
     project(v)?.let { Offset(it.x, it.y) }
 
 /**
- * 9 层硬件加速 Canvas 星空渲染管线：
- * L1 大气天穹 → L2 银河光带 → L3 坐标网格与黄道 → L4 梅西耶深空 →
- * L5 星座流光骨架 → L6 恒星 PSF 光学 → L7 行星与月相 → L8 选中轨迹 → L9 地平罗盘。
+ * Canvas 星空渲染管线：
+ * L1 大气天穹 → L2 银河光带 + 背景星砂场 → L3 坐标网格与黄道 → L3.5 三垣二十八宿 →
+ * L4 梅西耶深空 → L5 星座骨架 → L6 恒星 PSF 光学 → L7 行星/月相/空间站 →
+ * L8 选中轨迹 → L9 球面地平弧。地平线以下天体以 0.22 透明度透视呈现。
  *
- * 零分配渲染循环约定（见《零分配渲染循环审计》）：
- * - 全部 Paint / Path / RectF / Stroke / Brush 为字段预分配，逐帧 rewind + 原地改参复用；
+ * 零分配渲染循环约定：
+ * - 全部 Paint / Path / RectF / Brush 为字段预分配，逐帧 rewind + 原地改参复用；
  * - 天穹渐变 Brush 按屏幕高度缓存，仅在尺寸/模式变化时重建；
  * - 坐标热路径使用 [AstrometryEngine.HorPos] 与 [CelestialProjector.ScreenPosMut] 复用容器；
- * - 网格环 / 方位线的世界坐标在初始化时烘焙为 DoubleArray，逐帧仅投影；
+ * - 网格环 / 方位线 / 背景星砂的世界坐标在初始化时烘焙，逐帧仅投影；
  * - renderInto 以 synchronized 串行化 UI 帧与快门离屏渲染，消除共享缓存的并发竞争。
  */
 class SkyCanvasRenderer(private val vm: SkyViewModel) {
@@ -110,10 +111,8 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
     private val hudTextPaint: Paint by lazy {
         Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = android.graphics.Typeface.SANS_SERIF }
     }
-    private val hudRectPaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
     private val badgePaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
     private val badgeBorderPaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE } }
-    private val wallPaint: Paint by lazy { Paint(Paint.ANTI_ALIAS_FLAG) }
     private val tickPaint: Paint by lazy {
         Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.BUTT }
     }
@@ -125,24 +124,18 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
     private val eclipticPath: Path = Path()
     private val groundPath: androidx.compose.ui.graphics.Path = androidx.compose.ui.graphics.Path()
     private val ringPath: Path = Path()
-    private val pointPath: Path = Path()
     private val trajPath: Path = Path()
 
     // 天穹渐变缓存：仅当屏幕高度变化时重建
     private var domeCacheHeight = -1f
     private val domeBrushes = arrayOfNulls<Brush>(3) // 0 夜 1 晨昏 2 昼
     private var airglowBrush: Brush? = null
-    private var groundBrush: Brush? = null
     private var dashCacheDp = -1f
 
     // 网格世界坐标烘焙：5 高度圈（96 段）+ 12 方位线（21 段），仅初始化时构建
     private var gridWorld: Array<DoubleArray>? = null
     private var equatorWorld: DoubleArray? = null
     private var equatorLat: Double = Double.NaN
-
-    // 罗盘常量表
-    private val cardinalAz = intArrayOf(0, 45, 90, 135, 180, 225, 270, 315)
-    private val cardinalLabel = arrayOf("北 N", "东北 NE", "东 E", "东南 SE", "南 S", "西南 SW", "西 W", "西北 NW")
     private val monthNames = arrayOf(
         "一月", "二月", "三月", "四月", "五月", "六月",
         "七月", "八月", "九月", "十月", "十一月", "十二月"
@@ -151,6 +144,45 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
 
     // 黄道逐帧临时数组（NaN = 断点）
     private val eclipticXY = FloatArray(73 * 2)
+
+    // 背景星砂场：固定种子生成的 1500 颗暗星（视星等 4.2~6.2，60% 聚于银道面 ±18° 带），
+    // 以纯色圆点绘制，填充天空死黑并让银河带呈现星尘质感
+    private val bgRa = DoubleArray(BG_STAR_COUNT)
+    private val bgDec = DoubleArray(BG_STAR_COUNT)
+    private val bgRadiusDp = FloatArray(BG_STAR_COUNT)
+    private val bgAlpha = FloatArray(BG_STAR_COUNT)
+
+    init {
+        val rnd = kotlin.random.Random(42)
+        val cl = MilkyWayBandData.centerLine
+        for (i in 0 until BG_STAR_COUNT) {
+            if (i % 5 < 3) {
+                // 沿银河中线随机段插值 + 垂直抖动，自然勾勒银道带
+                val seg = rnd.nextInt(cl.size - 1)
+                val t = rnd.nextDouble()
+                val a = cl[seg]; val b = cl[seg + 1]
+                bgRa[i] = AstrometryEngine.normalizeDeg(
+                    a.raDeg + (b.raDeg - a.raDeg) * t + (rnd.nextDouble() - 0.5) * 16.0
+                )
+                bgDec[i] = (a.decDeg + (b.decDeg - a.decDeg) * t + (rnd.nextDouble() - 0.5) * 16.0)
+                    .coerceIn(-89.5, 89.5)
+            } else {
+                // 均匀球面分布
+                bgRa[i] = rnd.nextDouble() * 360.0
+                bgDec[i] = Math.toDegrees(kotlin.math.asin(rnd.nextDouble() * 2.0 - 1.0))
+            }
+            val bright = rnd.nextDouble().toFloat() // 越亮半径与透明度越高
+            bgRadiusDp[i] = 0.6f + 0.7f * bright
+            bgAlpha[i] = 0.15f + 0.35f * bright
+        }
+    }
+
+    // 地平弧逐帧采样缓存：alt=0 球面弧（±75° 方位、3° 步进）与地下暮光多边形
+    private val horizonArcPath: Path = Path()
+    private var horizonArcCount = 0
+    private var horizonArcMinY = Float.MAX_VALUE
+    private var horizonTwilightBucket = Int.MIN_VALUE
+    private var horizonTwilightBrush: Brush? = null
 
     // 吸附详情节流：仅目标/数值变化时重建格式串
     private var lastSnapRef: Any? = null
@@ -201,6 +233,12 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
             drawMeteors(f, dp, timeSec)
         }
 
+        // ---- L2.2 背景星砂场 ----
+        drawStarfield(f)
+
+        // ---- L2.8 地下暮光渐变（沿球面地平弧）----
+        drawGroundTwilight(f)
+
         // ---- L3 天球网格 / 天赤道 / 黄道 ----
         if (vm.showGrid) drawAltAzGrid()
         if (vm.showGrid) drawCelestialEquator(f)
@@ -231,7 +269,7 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
         // ---- L8 选中轨迹 ----
         if (vm.showTrajectory) drawTrajectory(f, dp)
 
-        // ---- L9 地平线 / 罗盘 ----
+        // ---- L9 球面地平弧 / 罗盘刻度 ----
         drawHorizon(f, dp)
 
         // ---- HUD 数据（准星吸附 / 引导箭头）----
@@ -306,10 +344,6 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
             listOf(Color.Transparent, CelestialPalette.HorizonAirglow),
             startY = h * 0.56f, endY = h * 0.74f
         )
-        groundBrush = Brush.verticalGradient(
-            listOf(Color(0xE6040812), Color(0xF7020509)),
-            startY = h * 0.35f, endY = h
-        )
     }
 
     // ==================================================================
@@ -343,7 +377,7 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
         val n = nativeCanvas0()
         for (k in 0 until 3) {
             val p = linePaint
-            p.color = 0xFF8AB4F8.toInt()
+            p.color = MW_COLORS[k]
             p.alpha = (alphas[k] * 255f).toInt()
             p.strokeWidth = widths[k] * pxPerDeg
             n.drawPath(mwPaths[k], p)
@@ -353,7 +387,7 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
         val gc = MilkyWayBandData.galacticCenter
         AstrometryEngine.equatorialToHorizontal(gc.raDeg, gc.decDeg, f.lstDeg, f.latitudeDeg, hz)
         if (projector.projectAltAzInto(hz.altDeg, hz.azDeg, scr)) {
-            StarOpticsShader.glowSpriteN(n, scr.x, scr.y, 22f * pxPerDeg, 0xFFB9D2FF.toInt(), 0.14f)
+            StarOpticsShader.glowSpriteN(n, scr.x, scr.y, 22f * pxPerDeg, 0xFFB8C6E8.toInt(), 0.14f)
         }
 
         // 银心方向星尘
@@ -363,6 +397,24 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
             if (projector.projectAltAzInto(hz.altDeg, hz.azDeg, scr)) {
                 n.drawCircle(scr.x, scr.y, 1.6f * density, fillPaint)
             }
+        }
+    }
+
+    /**
+     * 背景星砂场：1500 颗暗星逐帧批量投影，纯色 drawCircle 零 Shader 开销。
+     * 地平线以下以 0.22 透明度透视呈现。
+     */
+    private fun DrawScope.drawStarfield(f: SkyViewModel.FrameData) {
+        val n = nativeCanvas0()
+        val p = fillPaint
+        p.color = 0xFFC7D6F2.toInt()
+        for (i in 0 until BG_STAR_COUNT) {
+            AstrometryEngine.equatorialToHorizontal(bgRa[i], bgDec[i], f.lstDeg, f.latitudeDeg, hz)
+            if (!projector.projectAltAzInto(hz.altDeg, hz.azDeg, scr)) continue
+            var a = bgAlpha[i]
+            if (hz.altDeg < 0.0) a *= 0.22f
+            p.alpha = (a * 255f).toInt()
+            n.drawCircle(scr.x, scr.y, bgRadiusDp[i] * density, p)
         }
     }
 
@@ -579,60 +631,42 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
         f: SkyViewModel.FrameData, dp: Float
     ) {
         val n = nativeCanvas0()
-        val glow = CelestialPalette.ConstellationGlowActive
         val coreIdle = CelestialPalette.ConstellationLineIdle
         val coreActive = CelestialPalette.ConstellationLineActive
         val halfW = size.width * 0.5f
+        val labelPaint = hudTextPaint
+        labelPaint.setShadowLayer(4f, 0f, 0f, 0xB4000000.toInt())
         for (c in ConstellationCatalog.constellations) {
             val activation = vm.constellationActivation[c.abbr] ?: 0f
             val edges = edgesByConstellation[c.abbr] ?: continue
             val active = activation > 0.05f
-            val lineColor = if (active) coreActive else coreIdle
 
-            var endAx = 0f; var endAy = 0f; var endBx = 0f; var endBy = 0f
-            var hasEnds = false
             for (e in edges) {
                 AstrometryEngine.equatorialToHorizontal(e.a.raDeg, e.a.decDeg, f.lstDeg, f.latitudeDeg, hz)
-                val ax0 = hz.altDeg; val az0 = hz.azDeg
-                if (!projector.projectAltAzInto(ax0, az0, scr)) continue
+                val altA = hz.altDeg
+                if (!projector.projectAltAzInto(altA, hz.azDeg, scr)) continue
                 val sax = scr.x; val say = scr.y
                 AstrometryEngine.equatorialToHorizontal(e.b.raDeg, e.b.decDeg, f.lstDeg, f.latitudeDeg, hz)
-                if (!projector.projectAltAzInto(hz.altDeg, hz.azDeg, scr)) continue
+                val altB = hz.altDeg
+                if (!projector.projectAltAzInto(altB, hz.azDeg, scr)) continue
                 val sbx = scr.x; val sby = scr.y
                 if (abs(sax - sbx) > halfW) continue
+                // 整条边位于地下时以透视透明度呈现
+                val underMul = if (altA < 0.0 && altB < 0.0) 0.22f else 1f
                 val p = linePaint
                 p.strokeCap = Paint.Cap.ROUND
+                p.color = (if (active) coreActive else coreIdle).toArgb255()
                 if (active) {
-                    // Pass 1 外发光底座（线性减淡）
-                    p.color = glow.toArgb255()
-                    p.alpha = (glow.alpha * activation * 255f).toInt()
-                    p.strokeWidth = 5.dp.toPx()
-                    n.drawLine(sax, say, sbx, sby, p)
-                    // Pass 2 锐利能量内芯
-                    p.color = lineColor.toArgb255()
-                    p.alpha = (lineColor.alpha.coerceAtLeast(0.45f) * 255f).toInt()
-                    p.strokeWidth = 1.2.dp.toPx()
-                    n.drawLine(sax, say, sbx, sby, p)
-                    endAx = sax; endAy = say; endBx = sbx; endBy = sby
-                    hasEnds = true
+                    p.alpha = ((0.30f + 0.35f * activation) * underMul * 255f).toInt()
+                    p.strokeWidth = 1.0.dp.toPx()
                 } else {
-                    p.color = lineColor.toArgb255()
-                    p.alpha = (lineColor.alpha * 255f).toInt()
-                    p.strokeWidth = 1.2.dp.toPx()
-                    n.drawLine(sax, say, sbx, sby, p)
+                    p.alpha = (0.25f * underMul * 255f).toInt()
+                    p.strokeWidth = 0.6.dp.toPx()
                 }
-            }
-            // 端点呼吸环（激活态）
-            if (active && hasEnds) {
-                val breath = 0.5f + 0.5f * sin((f.simTimeMillis % 3_600_000L) / 1000f * 2.2f)
-                strokePaint.color = coreActive.toArgb255()
-                strokePaint.strokeWidth = 1.0.dp.toPx()
-                strokePaint.alpha = (0.35f * activation * breath * 255f).toInt()
-                n.drawCircle(endAx, endAy, 3.2.dp.toPx(), strokePaint)
-                n.drawCircle(endBx, endBy, 3.2.dp.toPx(), strokePaint)
+                n.drawLine(sax, say, sbx, sby, p)
             }
 
-            // 双语铭牌（激活时浮现）
+            // 双语铭牌：纯文本微阴影悬浮（激活时浮现）
             if (activation > 0.45f) {
                 val center = ConstellationCatalog.centerRaDec(c)
                 AstrometryEngine.equatorialToHorizontal(center.raDeg, center.decDeg, f.lstDeg, f.latitudeDeg, hz)
@@ -640,24 +674,15 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
                 val sx = scr.x; val sy = scr.y
                 val label = "${c.nameZh} · ${c.nameEn}"
                 val lx = sx.coerceIn(80f * dp, size.width - 80f * dp) // 防止铭牌被屏幕边缘裁切
-                val tp = hudTextPaint
-                tp.textSize = 12f * dp
-                val tw = tp.measureText(label)
-                val pad = 7f * dp
-                hudRectPaint.color = android.graphics.Color.argb(
-                    (120 * activation).toInt(), 12, 22, 48
+                labelPaint.textSize = 12f * dp
+                labelPaint.color = android.graphics.Color.argb(
+                    (215 * activation).toInt(), 226, 236, 255
                 )
-                n.drawRoundRect(
-                    lx - tw / 2 - pad, sy - 24f * dp,
-                    lx + tw / 2 + pad, sy + 2f * dp,
-                    10f * dp, 10f * dp, hudRectPaint
-                )
-                tp.color = android.graphics.Color.argb(
-                    (255 * activation).toInt(), 230, 238, 255
-                )
-                n.drawText(label, lx - tw / 2, sy - 7f * dp, tp)
+                val tw = labelPaint.measureText(label)
+                n.drawText(label, lx - tw / 2, sy - 8f * dp, labelPaint)
             }
         }
+        labelPaint.clearShadowLayer()
     }
 
     // ==================================================================
@@ -671,7 +696,6 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
         for (star in starsFaintFirst) {
             AstrometryEngine.equatorialToHorizontal(star.raDeg, star.decDeg, f.lstDeg, f.latitudeDeg, hz)
             val underground = hz.altDeg < 0
-            if (underground && star.mag > 3.2) continue // 地下只保留较亮星
             if (!projector.projectAltAzInto(
                     AstrometryEngine.apparentAltitudeDeg(hz.altDeg), hz.azDeg, scr
                 )) continue
@@ -679,7 +703,7 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
             val rPx = StarOpticsShader.coreRadiusDp(star.mag) * dp
             val twinkle = if (underground) 0.3f
             else StarOpticsShader.scintillation(hz.altDeg, timeSec, StarOpticsShader.hash01(star.id))
-            val alpha = if (underground) 0.3f else 1f
+            val alpha = if (underground) 0.22f else 1f
             val argb = if (underground) 0xFF5A6B94.toInt() else StarOpticsShader.bvToColor(star.bv).toArgb255()
 
             StarOpticsShader.drawStarN(
@@ -897,18 +921,14 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
             if (!projector.projectAltAzInto(hz.altDeg, hz.azDeg, scr)) continue
             val scx = scr.x; val scy = scr.y
             val tp = hudTextPaint
-            tp.color = android.graphics.Color.argb(190, 232, 201, 106)
+            tp.setShadowLayer(4f, 0f, 0f, 0xB4000000.toInt())
+            tp.color = android.graphics.Color.argb(200, 232, 201, 106)
             tp.textSize = 13f * dp
             tp.isFakeBoldText = true
             val label = enc.nameZh
             val tw = tp.measureText(label)
-            wallPaint.color = android.graphics.Color.argb(110, 24, 20, 8)
-            n.drawRoundRect(
-                scx - tw / 2 - 6f * dp, scy - 16f * dp,
-                scx + tw / 2 + 6f * dp, scy + 4f * dp,
-                8f * dp, 8f * dp, wallPaint
-            )
             n.drawText(label, scx - tw / 2, scy - 2f * dp, tp)
+            tp.clearShadowLayer()
         }
     }
 
@@ -1219,72 +1239,86 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
     private var lastTrajLon = Double.NaN
 
     // ==================================================================
-    // L9 地平线
+    // L2.8 + L9 球面地平弧与地下暮光
     // ==================================================================
 
-    private fun DrawScope.drawHorizon(f: SkyViewModel.FrameData, dp: Float) {
-        val n = nativeCanvas0()
-        // 地平圆是过相机中心的平面 → 针孔投影下必为一条直线。
-        // 取视线方位 ±50° 内多点确定该直线（最小二乘退化为首尾两点），再填充地下区域。
+    /**
+     * 沿地平圈（alt=0）以 3° 方位角步进采样投影成自然弯曲的球面弧，
+     * 并在弧下方填充柔和暮光渐变（半透明，让地下星空以透视感显影）。
+     * 弧路径缓存于 [horizonArcPath]，供 L9 描边与刻度复用。
+     */
+    private fun DrawScope.drawGroundTwilight(f: SkyViewModel.FrameData) {
         val boreAz = if (vm.sensorMode) vm.boresight.azDeg else vm.orbit.centerAzDeg
-        var firstX = 0f; var firstY = 0f; var lastX = 0f; var lastY = 0f
-        var count = 0
-        for (d in HORIZON_SAMPLES) {
-            if (projector.projectAltAzInto(0.0, AstrometryEngine.normalizeDeg(boreAz + d), scr)) {
-                if (count == 0) { firstX = scr.x; firstY = scr.y }
-                lastX = scr.x; lastY = scr.y
-                count++
-            }
+        horizonArcCount = 0
+        horizonArcMinY = Float.MAX_VALUE
+        horizonArcPath.rewind()
+        groundPath.rewind()
+        var pen = false
+        var firstX = 0f
+        var lastX = 0f
+        val n = HORIZON_ARC_SAMPLES
+        for (k in 0 until n) {
+            val az = AstrometryEngine.normalizeDeg(boreAz + (k - n / 2.0) * 3.0)
+            if (!projector.projectAltAzInto(0.0, az, scr)) { pen = false; continue }
+            val x = scr.x; val y = scr.y
+            if (y < horizonArcMinY) horizonArcMinY = y
+            if (!pen) { horizonArcPath.moveTo(x, y); groundPath.moveTo(x, y); pen = true; firstX = x }
+            else { horizonArcPath.lineTo(x, y); groundPath.lineTo(x, y) }
+            lastX = x
+            horizonArcCount++
         }
-        if (count >= 2 && abs(lastX - firstX) > 2f) {
-            val m = (lastY - firstY) / (lastX - firstX)
-            val c = firstY - m * firstX
-            val yL = c
-            val yR = m * size.width + c
-            if (yL < size.height + 4f || yR < size.height + 4f) {
-                // 地下剪影填充
-                groundPath.rewind()
-                groundPath.moveTo(0f, yL)
-                groundPath.lineTo(size.width, yR)
-                groundPath.lineTo(size.width, size.height + 4f)
-                groundPath.lineTo(0f, size.height + 4f)
-                groundPath.close()
-                if (domeCacheHeight != size.height) rebuildDomeBrushes(size.height)
-                groundBrush?.let { drawPath(groundPath, it) }
-                // 发光地平线
-                val q = linePaint
-                q.strokeCap = Paint.Cap.ROUND
-                q.color = 0x3326C6DA.toInt()
-                q.strokeWidth = 7f * dp
-                n.drawLine(0f, yL, size.width, yR, q)
-                q.color = 0xFF26C6DA.toInt()
-                q.alpha = 0x8C // 0.55f
-                q.strokeWidth = 1.6f * dp
-                n.drawLine(0f, yL, size.width, yR, q)
-                q.alpha = 255
+        if (horizonArcCount >= 2 && pen) {
+            // 弧下方暮光多边形（弧线 → 屏幕底部）
+            groundPath.lineTo(lastX, size.height + 4f)
+            groundPath.lineTo(firstX, size.height + 4f)
+            groundPath.close()
+            val bucket = (horizonArcMinY / 24f).toInt()
+            if (bucket != horizonTwilightBucket || horizonTwilightBrush == null) {
+                horizonTwilightBucket = bucket
+                horizonTwilightBrush = Brush.verticalGradient(
+                    listOf(Color(0x2E0A1428), Color(0x8A02040A)),
+                    startY = (bucket * 24f).coerceIn(0f, size.height * 0.92f),
+                    endY = size.height
+                )
             }
+            horizonTwilightBrush?.let { drawPath(groundPath, it) }
         }
+    }
 
-        // 罗盘刻度与方位大字
+    /** 极细球面地平弧 + 15° 微刻度针 + 45° 方位角文字。 */
+    private fun DrawScope.drawHorizon(f: SkyViewModel.FrameData, dp: Float) {
+        if (horizonArcCount < 2) return
+        val n = nativeCanvas0()
+        val q = linePaint
+        q.strokeCap = Paint.Cap.ROUND
+        q.color = 0x5970D6FF.toInt()
+        q.strokeWidth = 0.8f * dp
+        n.drawPath(horizonArcPath, q)
+
+        val boreAz = if (vm.sensorMode) vm.boresight.azDeg else vm.orbit.centerAzDeg
+        val spanDeg = (HORIZON_ARC_SAMPLES / 2.0) * 3.0
         val tp = hudTextPaint
-        for (az in 0 until 360 step 5) {
-            if (!projector.projectAltAzInto(0.5, az.toDouble(), scr)) continue
-            val major = az % 45 == 0
-            val len = (if (major) 14f else 7f) * dp
-            tickPaint.color = android.graphics.Color.argb(
-                if (major) 220 else 110, 38, 198, 218
-            )
-            tickPaint.strokeWidth = if (major) 2f else 1f
-            n.drawLine(scr.x, scr.y, scr.x, scr.y - len, tickPaint)
-            if (major) {
-                val label = cardinalLabel[az / 45]
-                tp.color = android.graphics.Color.argb(235, 235, 245, 255)
-                tp.textSize = if (az % 90 == 0) 15f else 12f * dp
-                tp.isFakeBoldText = az % 90 == 0
-                val tw = tp.measureText(label)
-                n.drawText(label, scr.x - tw / 2, scr.y - 18f * dp, tp)
+        tp.isFakeBoldText = false
+        tp.setShadowLayer(3f, 0f, 0f, 0xCC000000.toInt())
+        var az = kotlin.math.floor((boreAz - spanDeg) / 15.0) * 15.0
+        while (az <= boreAz + spanDeg) {
+            val azN = AstrometryEngine.normalizeDeg(az)
+            if (projector.projectAltAzInto(0.0, azN, scr)) {
+                val major = (azN % 45.0).toInt() == 0
+                tickPaint.color = 0x9970D6FF.toInt()
+                tickPaint.strokeWidth = 0.9f * dp
+                n.drawLine(scr.x, scr.y, scr.x, scr.y - 4f * dp, tickPaint)
+                if (major) {
+                    val label = ARC_AZ_LABELS[((azN / 45.0).toInt()) % 8]
+                    tp.color = android.graphics.Color.argb(0xE6, 200, 222, 255)
+                    tp.textSize = 9f * dp
+                    val tw = tp.measureText(label)
+                    n.drawText(label, scr.x - tw / 2, scr.y - 8f * dp, tp)
+                }
             }
+            az += 15.0
         }
+        tp.clearShadowLayer()
     }
 
     /** 引导目标入镜锁定事件（边沿检测），由 UI 帧循环消费触发触觉/音效。 */
@@ -1370,9 +1404,19 @@ class SkyCanvasRenderer(private val vm: SkyViewModel) {
     private fun Color.toArgb255(): Int = this.toArgb()
 
     companion object {
-        private val MW_WIDTHS = floatArrayOf(15f, 9f, 4.5f)
-        private val MW_ALPHAS = floatArrayOf(0.05f, 0.08f, 0.12f)
-        private val HORIZON_SAMPLES = doubleArrayOf(-50.0, -35.0, -20.0, 20.0, 35.0, 50.0)
+        private const val BG_STAR_COUNT = 1500
+        private const val HORIZON_ARC_SAMPLES = 51 // ±75° 方位角，3° 步进
+        private val MW_WIDTHS = floatArrayOf(16f, 9.5f, 5f)
+        private val MW_ALPHAS = floatArrayOf(0.03f, 0.04f, 0.05f)
+        private val MW_COLORS = intArrayOf(
+            0xFF4A78D0.toInt(), // 外层宽带 · 星尘蓝
+            0xFF6B7FD7.toInt(), // 中层 · 淡紫蓝
+            0xFFB8C6E8.toInt()  // 内层 · 暖星光
+        )
+        private val ARC_AZ_LABELS = arrayOf(
+            "N 0°", "NE 45°", "E 90°", "SE 135°",
+            "S 180°", "SW 225°", "W 270°", "NW 315°"
+        )
         private const val SUN_LABEL = "太阳 Sun"
         private const val SAT_SUNLIT = "被阳光照亮"
         private const val SAT_ECLIPSED = "地影中"

@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
@@ -29,13 +31,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -45,8 +47,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Nightlife
@@ -78,18 +78,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,13 +101,17 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.celestiaview.ar.core.math.AstrometryEngine
 import com.celestiaview.ar.core.media.SkySnapshotExporter
+import com.celestiaview.ar.data.catalog.BrightStarCatalog
+import com.celestiaview.ar.data.catalog.ConstellationCatalog
 import com.celestiaview.ar.data.catalog.CultureMode
+import com.celestiaview.ar.data.model.CelestialTarget
+import com.celestiaview.ar.data.model.Constellation
 import com.celestiaview.ar.data.model.ObservingSite
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.components.CelestialDetailSheet
-import com.celestiaview.ar.ui.components.GlassCard
-import com.celestiaview.ar.ui.components.GlassCapsuleButton
+import com.celestiaview.ar.ui.components.DockItem
 import com.celestiaview.ar.ui.components.GlassCapsuleLabelButton
 import com.celestiaview.ar.ui.components.GlassPanel
 import com.celestiaview.ar.ui.components.SearchAndFilterModal
@@ -120,6 +127,10 @@ import com.celestiaview.ar.ui.theme.redLightSafe
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
+
+/** 无框悬浮文字的柔和阴影（保证星空上的可读性）。 */
+private val HudTextShadow = Shadow(color = Color(0xCC000000), blurRadius = 6f)
 
 class MainActivity : ComponentActivity() {
 
@@ -142,7 +153,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
         setContent {
             DeepSpaceTheme {
                 SkyApp(
@@ -458,7 +475,7 @@ private fun SkyApp(
         // ---------------- 准星 HUD ----------------
         TargetReticleOverlay(vm = vm, renderer = renderer, modifier = Modifier.fillMaxSize())
 
-        // ---------------- 硬件降级提示胶囊（无相机授权 / 相机不可用 / 无陀螺仪） ----------------
+        // ---------------- 硬件降级提示（无框悬浮文字） ----------------
         val degradeHint = when {
             vm.arMode && !cameraGranted -> "相机未授权 · 已切换纯深空大气模式"
             vm.arMode && vm.cameraBindFailed -> "相机不可用 · 已切换纯深空大气模式"
@@ -466,183 +483,282 @@ private fun SkyApp(
             else -> null
         }
         if (degradeHint != null) {
-            GlassCard(
-                Modifier
+            Text(
+                degradeHint,
+                modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 72.dp),
-                cornerRadius = 18.dp,
-                redLight = red,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    degradeHint,
-                    fontSize = 11.sp,
-                    color = accent.redLightSafe(red)
-                )
-            }
+                    .statusBarsPadding()
+                    .padding(top = 64.dp),
+                fontSize = 11.sp,
+                color = accent.redLightSafe(red),
+                style = TextStyle(shadow = HudTextShadow)
+            )
         }
 
-        // ---------------- 顶部极简悬浮顶栏 ----------------
-        Row(
+        // ---------------- 左上角：无框天文台信息流 ----------------
+        Column(
             Modifier
                 .statusBarsPadding()
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .align(Alignment.TopStart)
+                .padding(start = 18.dp, top = 8.dp)
         ) {
-            GlassCard(
-                Modifier.weight(1f),
-                cornerRadius = 20.dp,
-                redLight = red,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)
+            // 观测地与定位状态（点击进入地点面板）
+            Row(
+                Modifier
+                    .clickable { showLocation = true }
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Place, null,
-                        tint = CelestialPalette.AccentCyan.redLightSafe(red),
-                        modifier = Modifier.width(14.dp)
+                Icon(
+                    Icons.Default.LocationOn, null,
+                    tint = Color(0xFF70D6FF).redLightSafe(red),
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    vm.site.nameZh + if (vm.gpsState ==
+                        com.celestiaview.ar.core.sensor.LocationProvider.GpsState.SEARCHING
+                    ) " · 定位中" else "",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xF2EDF5FF).redLightSafe(red),
+                    style = TextStyle(shadow = HudTextShadow)
+                )
+            }
+            // 天文遥测
+            Text(
+                "LST %02d:%02d:%02d · FOV %.0f°".format(
+                    lstH.toInt(), ((lstH % 1.0) * 60).toInt(),
+                    ((lstH * 60) % 60).toInt(), vm.fovYDeg
+                ),
+                modifier = Modifier.padding(top = 2.dp, start = 21.dp),
+                fontSize = 11.sp,
+                style = CelestialType.Tnum.copy(
+                    color = Color(0x999AB2D6).redLightSafe(red),
+                    shadow = HudTextShadow
+                )
+            )
+            Spacer(Modifier.height(18.dp))
+            // 当前视野印记：锁定天体或主星座（点击进入百科）
+            val viewMark = remember(vm.frameTick / 30) { currentViewMark(vm) }
+            Row(
+                Modifier
+                    .clickable { if (vm.selected != null) showDetail = true }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ViewMarkBadge(viewMark, red)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(
+                        viewMark.titleZh,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xF2EDF5FF).redLightSafe(red),
+                        style = TextStyle(shadow = HudTextShadow)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            vm.site.nameZh + if (vm.gpsState ==
-                                com.celestiaview.ar.core.sensor.LocationProvider.GpsState.SEARCHING
-                            ) " · 定位中" else "",
-                            color = CelestialPalette.TextPrimary.redLightSafe(red),
-                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+                    Text(
+                        viewMark.titleEn,
+                        fontSize = 11.sp,
+                        letterSpacing = 1.5.sp,
+                        color = Color(0x999AB2D6).redLightSafe(red),
+                        style = TextStyle(shadow = HudTextShadow)
+                    )
+                    Text(
+                        viewMark.coordLine,
+                        fontSize = 10.sp,
+                        style = CelestialType.Tnum.copy(
+                            color = Color(0x999AB2D6).redLightSafe(red),
+                            shadow = HudTextShadow
                         )
-                        Text(
-                            "LST %02d:%02d:%02d · FOV %.0f°".format(
-                                lstH.toInt(), ((lstH % 1.0) * 60).toInt(),
-                                ((lstH * 60) % 60).toInt(), vm.fovYDeg
-                            ),
-                            color = CelestialPalette.TextMuted.redLightSafe(red),
-                            fontSize = 11.sp,
-                            style = CelestialType.Tnum
-                        )
-                    }
+                    )
                 }
-            }
-            Spacer(Modifier.width(10.dp))
-            GlassCapsuleButton(Icons.Default.Search, "搜索寻星", redLight = red) {
-                showSearch = !showSearch
-            }
-            Spacer(Modifier.width(10.dp))
-            GlassCapsuleButton(Icons.Default.Nightlife, "今夜简报", redLight = red) {
-                showTonight = !showTonight
             }
         }
 
-        // ---------------- 底部：锁定卡 + 时间机器 + 流光船坞 ----------------
+        // ---------------- 右上角：无框工具图标列 ----------------
+        Column(
+            Modifier
+                .statusBarsPadding()
+                .align(Alignment.TopEnd)
+                .padding(end = 18.dp, top = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Default.Search, "搜索寻星",
+                tint = Color(0xCCDBE6F6).redLightSafe(red),
+                modifier = Modifier
+                    .size(19.dp)
+                    .clickable { showSearch = !showSearch }
+                    .padding(2.dp)
+            )
+            Icon(
+                Icons.Default.Nightlife, "今夜简报",
+                tint = Color(0xCCDBE6F6).redLightSafe(red),
+                modifier = Modifier
+                    .size(19.dp)
+                    .clickable { showTonight = !showTonight }
+                    .padding(2.dp)
+            )
+            Icon(
+                Icons.Default.AutoAwesome, "星图文化切换",
+                tint = Color(0xCCDBE6F6).redLightSafe(red),
+                modifier = Modifier
+                    .size(19.dp)
+                    .clickable { vm.cultureMode = vm.cultureMode.next() }
+                    .padding(2.dp)
+            )
+        }
+
+        // ---------------- 底部：暗夜羽化 + 深空时间与视场印记 + 幽灵船坞 ----------------
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(84.dp)
+                .background(
+                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xD902050D)))
+                )
+        )
+
+        if (!timeMachineExpanded) {
+            // 左下角：时间机器入口（脉冲星轨图标 + LST + 日期/倍速）
+            val lstText = remember((vm.simTimeMillis / 1000L)) {
+                "%02d:%02d:%02d".format(
+                    lstH.toInt(), ((lstH % 1.0) * 60).toInt(), ((lstH * 60) % 60).toInt()
+                )
+            }
+            val dateText = remember(vm.simTimeMillis / 3_600_000L) {
+                java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                    .format(java.util.Date(vm.simTimeMillis))
+            }
+            val rateText = remember(vm.isLive, vm.timeRate) {
+                if (vm.isLive) "LIVE" else "⏩ %s×".format(
+                    if (vm.timeRate % 1.0 == 0.0) "%d".format(vm.timeRate.toInt())
+                    else "%.1f".format(vm.timeRate)
+                )
+            }
+            Row(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .navigationBarsPadding()
+                    .padding(start = 18.dp, bottom = 104.dp)
+                    .clickable { timeMachineExpanded = true }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                StarTrailIcon(red)
+                Spacer(Modifier.width(9.dp))
+                Column {
+                    Text(
+                        "LST $lstText",
+                        fontSize = 14.sp,
+                        style = CelestialType.Tnum.copy(
+                            color = Color(0xF2EDF5FF).redLightSafe(red),
+                            shadow = HudTextShadow
+                        )
+                    )
+                    Text(
+                        "$dateText · $rateText",
+                        fontSize = 11.sp,
+                        style = CelestialType.Tnum.copy(
+                            color = Color(0x999AB2D6).redLightSafe(red),
+                            shadow = HudTextShadow
+                        )
+                    )
+                }
+            }
+            // 右下角：视场与姿态状态（点击切换传感器/手势）
+            Text(
+                "FOV %.1f° · %s ›".format(vm.fovYDeg, if (vm.sensorMode) "传感器" else "手势"),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(end = 18.dp, bottom = 112.dp)
+                    .clickable { vm.toggleSensorMode() }
+                    .padding(2.dp),
+                fontSize = 11.sp,
+                style = CelestialType.Tnum.copy(
+                    color = Color(0x999AB2D6).redLightSafe(red),
+                    shadow = HudTextShadow
+                )
+            )
+        }
+
+        // 吸附目标裸信息行（未锁定时显示，点击进入百科）
+        if (vm.selected == null) {
+            vm.snapped?.let { snap ->
+                Row(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 148.dp)
+                        .clickable { vm.select(snap.target); showDetail = true }
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(5.dp)
+                            .background(accent.redLightSafe(red), RoundedCornerShape(3.dp))
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "%s · 高度 %.1f° · 方位 %.0f° · 详情 ›".format(
+                            snap.target.displayName, snap.altDeg, snap.azDeg
+                        ),
+                        fontSize = 12.sp,
+                        style = CelestialType.Tnum.copy(
+                            color = Color(0xCCDBE6F6).redLightSafe(red),
+                            shadow = HudTextShadow
+                        )
+                    )
+                }
+            }
+        }
+
+        // 幽灵船坞：六项无边框均分悬浮
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (vm.selected == null && !showDetail) {
-                vm.snapped?.let { snap ->
-                    // 88dp 紧凑预览胶囊卡：发光图标 + 双语名 + 实时高度方位 + 详情入口
-                    GlassCard(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(88.dp)
-                            .clickable { vm.select(snap.target); showDetail = true },
-                        cornerRadius = 24.dp,
-                        redLight = red,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                Modifier
-                                    .width(44.dp)
-                                    .height(44.dp)
-                                    .background(
-                                        Brush.radialGradient(
-                                            listOf(
-                                                CelestialPalette.AccentCyan.copy(alpha = 0.45f),
-                                                Color.Transparent
-                                            )
-                                        )
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.Explore, null,
-                                    tint = CelestialPalette.TextPrimary.redLightSafe(red),
-                                    modifier = Modifier.width(20.dp)
-                                )
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    snap.target.displayName,
-                                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                                    color = CelestialPalette.TextPrimary.redLightSafe(red)
-                                )
-                                Spacer(Modifier.height(3.dp))
-                                Text(
-                                    "高度 %.1f° · 方位 %.0f°".format(snap.altDeg, snap.azDeg),
-                                    fontSize = 11.sp,
-                                    style = CelestialType.Tnum,
-                                    color = CelestialPalette.TextMuted.redLightSafe(red)
-                                )
-                            }
-                            Text(
-                                "详情 ›",
-                                fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                color = CelestialPalette.AccentCyan.redLightSafe(red)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                }
+            if (timeMachineExpanded) {
+                TimeMachineScrubber(vm, true) { timeMachineExpanded = false }
+                Spacer(Modifier.height(8.dp))
             }
-
-            TimeMachineScrubber(vm, timeMachineExpanded) { timeMachineExpanded = !timeMachineExpanded }
-
-            Spacer(Modifier.height(10.dp))
-
-            // 流光磨砂玻璃船坞栏
-            GlassCard(
-                cornerRadius = 28.dp,
-                redLight = red,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp)
             ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)
-                ) {
-                    GlassCapsuleButton(
-                        Icons.Default.CameraAlt, "AR 实景",
-                        selected = vm.arMode, redLight = red
-                    ) { vm.toggleArMode() }
-                    GlassCapsuleButton(
-                        Icons.Default.ScreenRotation, "陀螺仪",
-                        selected = vm.sensorMode, redLight = red
-                    ) { vm.toggleSensorMode() }
-                    GlassCapsuleButton(
-                        Icons.Default.AutoAwesome, "星座线",
-                        selected = vm.showConstellations, redLight = red
-                    ) { vm.showConstellations = !vm.showConstellations }
-                    GlassCapsuleButton(
-                        Icons.Default.GridOn, "网格",
-                        selected = vm.showGrid, redLight = red
-                    ) { vm.showGrid = !vm.showGrid }
-                    GlassCapsuleButton(
-                        Icons.Default.Schedule, "时间机器",
-                        selected = timeMachineExpanded, redLight = red
-                    ) { timeMachineExpanded = !timeMachineExpanded }
-                    GlassCapsuleButton(
-                        Icons.Default.Nightlight, "红光模式",
-                        selected = vm.redLight, redLight = red
-                    ) { vm.toggleRedLight() }
-                }
+                DockItem(
+                    Icons.Default.CameraAlt, "实景", vm.arMode, red,
+                    Modifier.weight(1f)
+                ) { vm.toggleArMode() }
+                DockItem(
+                    Icons.Default.ScreenRotation, "姿态", vm.sensorMode, red,
+                    Modifier.weight(1f)
+                ) { vm.toggleSensorMode() }
+                DockItem(
+                    Icons.Default.AutoAwesome, "星官",
+                    vm.cultureMode != CultureMode.IAU, red,
+                    Modifier.weight(1f)
+                ) { vm.cultureMode = vm.cultureMode.next() }
+                DockItem(
+                    Icons.Default.Layers, "图层", showLayers, red,
+                    Modifier.weight(1f)
+                ) { showLayers = !showLayers }
+                DockItem(
+                    Icons.Default.Schedule, "时间", timeMachineExpanded, red,
+                    Modifier.weight(1f)
+                ) { timeMachineExpanded = !timeMachineExpanded }
+                DockItem(
+                    Icons.Default.Nightlight, "夜视", vm.redLight, red,
+                    Modifier.weight(1f)
+                ) { vm.toggleRedLight() }
             }
         }
 
@@ -660,7 +776,7 @@ private fun SkyApp(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(bottom = 168.dp) // 让出时间机器条 + 船坞高度
+                .padding(bottom = 150.dp) // 让出底部印记与船坞
         ) {
             AnimatedVisibility(
                 visible = showTonight,
@@ -943,5 +1059,169 @@ private fun LayerSettingsPanel(
                 ) { vm.toggleSound() }
             }
         }
+    }
+}
+
+// ----------------------------------------------------------------------
+// 左上角视野印记与底部时间印记
+// ----------------------------------------------------------------------
+
+/** 当前视野印记：锁定天体优先，其次视轴主星座。 */
+private data class ViewMark(
+    val titleZh: String,
+    val titleEn: String,
+    val coordLine: String,
+    val abbr: String?
+)
+
+/** 计算当前视野印记（约 2Hz 调用一次；星座中心解算 48 次属可接受成本）。 */
+private fun currentViewMark(vm: SkyViewModel): ViewMark {
+    vm.selected?.let { t ->
+        val en = when (t) {
+            is CelestialTarget.StarTarget -> t.star.nameEn
+            is CelestialTarget.PlanetTarget -> t.key.takeIf { it.startsWith("CONST:") }
+                ?.removePrefix("CONST:")?.let { abbr ->
+                    ConstellationCatalog.byAbbr(abbr)?.nameEn
+                } ?: ""
+            else -> ""
+        }
+        val abbr = when (t) {
+            is CelestialTarget.StarTarget -> t.star.constellation
+            is CelestialTarget.PlanetTarget ->
+                t.key.takeIf { it.startsWith("CONST:") }?.removePrefix("CONST:")
+            else -> null
+        }
+        return ViewMark(t.displayName, en, raDecLine(t.raDeg, t.decDeg), abbr)
+    }
+    val active = vm.constellationActivation.maxByOrNull { it.value }
+    val c = if (active != null && active.value > 0.08f) {
+        ConstellationCatalog.byAbbr(active.key)
+    } else {
+        nearestConstellation(vm)
+    } ?: ConstellationCatalog.constellations.first()
+    val center = ConstellationCatalog.centerRaDec(c)
+    return ViewMark(c.nameZh, c.nameEn, raDecLine(center.raDeg, center.decDeg), c.abbr)
+}
+
+private fun nearestConstellation(vm: SkyViewModel): Constellation? {
+    val f = vm.frame
+    val b = vm.boresight
+    var best: Constellation? = null
+    var bestSep = Double.MAX_VALUE
+    for (c in ConstellationCatalog.constellations) {
+        val center = ConstellationCatalog.centerRaDec(c)
+        val hz = AstrometryEngine.equatorialToHorizontal(
+            center.raDeg, center.decDeg, f.lstDeg, f.latitudeDeg
+        )
+        val sep = AstrometryEngine.angularSeparationDeg(
+            b.azDeg, b.altDeg, hz.azDeg, hz.altDeg
+        )
+        if (sep < bestSep) {
+            bestSep = sep
+            best = c
+        }
+    }
+    return best
+}
+
+private fun raDecLine(raDeg: Double, decDeg: Double): String {
+    val h = raDeg / 15.0
+    val hh = h.toInt()
+    val mm = ((h - hh) * 60).toInt()
+    val sign = if (decDeg < 0) "-" else "+"
+    val ad = kotlin.math.abs(decDeg)
+    val dd = ad.toInt()
+    val dm = ((ad - dd) * 60).toInt()
+    return "RA %02dh %02dm · Dec %s%02d° %02d′".format(hh, mm, sign, dd, dm)
+}
+
+/** 22dp 星座微缩连线图（静态赤道坐标归一化，remember 级缓存）。 */
+private class MiniFigure(val pts: FloatArray, val edges: List<Pair<Int, Int>>)
+
+@Composable
+private fun ViewMarkBadge(mark: ViewMark, red: Boolean) {
+    val lineColor = Color(0xCCDBE6F6).redLightSafe(red)
+    val fig = remember(mark.abbr) {
+        val abbr = mark.abbr ?: return@remember null
+        val c = ConstellationCatalog.byAbbr(abbr) ?: return@remember null
+        val members = c.memberStarIds.map { BrightStarCatalog.byId(it) }
+        if (members.isEmpty()) return@remember null
+        var minRa = Double.MAX_VALUE; var maxRa = -Double.MAX_VALUE
+        var minDec = Double.MAX_VALUE; var maxDec = -Double.MAX_VALUE
+        for (s in members) {
+            if (s.raDeg < minRa) minRa = s.raDeg
+            if (s.raDeg > maxRa) maxRa = s.raDeg
+            if (s.decDeg < minDec) minDec = s.decDeg
+            if (s.decDeg > maxDec) maxDec = s.decDeg
+        }
+        val spanRa = (maxRa - minRa).coerceAtLeast(1e-3)
+        val spanDec = (maxDec - minDec).coerceAtLeast(1e-3)
+        val pts = FloatArray(members.size * 2)
+        members.forEachIndexed { i, s ->
+            pts[i * 2] = ((s.raDeg - minRa) / spanRa).toFloat()
+            pts[i * 2 + 1] = (1.0 - (s.decDeg - minDec) / spanDec).toFloat()
+        }
+        // 边以全局星表 ID 表示，映射为成员序号
+        val idToIdx = HashMap<Int, Int>(members.size * 2)
+        members.forEachIndexed { i, s -> idToIdx[s.id] = i }
+        val edges = c.edges.mapNotNull { (a, b) ->
+            val ia = idToIdx[a]
+            val ib = idToIdx[b]
+            if (ia != null && ib != null) ia to ib else null
+        }
+        MiniFigure(pts, edges)
+    }
+    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
+        val w = size.width
+        val h = size.height
+        val pad = 2.dp.toPx()
+        val sx = w - pad * 2
+        val sy = h - pad * 2
+        fun px(u: Float) = pad + u * sx
+        fun py(v: Float) = pad + v * sy
+        if (fig == null) {
+            // 非星座目标：四芒星光印记
+            val c = androidx.compose.ui.geometry.Offset(w / 2f, h / 2f)
+            drawLine(lineColor, Offset(c.x - 7.dp.toPx(), c.y), Offset(c.x + 7.dp.toPx(), c.y), 0.8.dp.toPx())
+            drawLine(lineColor, Offset(c.x, c.y - 7.dp.toPx()), Offset(c.x, c.y + 7.dp.toPx()), 0.8.dp.toPx())
+            drawLine(lineColor, Offset(c.x - 4.dp.toPx(), c.y - 4.dp.toPx()), Offset(c.x + 4.dp.toPx(), c.y + 4.dp.toPx()), 0.6.dp.toPx())
+            drawLine(lineColor, Offset(c.x - 4.dp.toPx(), c.y + 4.dp.toPx()), Offset(c.x + 4.dp.toPx(), c.y - 4.dp.toPx()), 0.6.dp.toPx())
+            drawCircle(lineColor, 1.2.dp.toPx(), c)
+            return@Canvas
+        }
+        for ((a, b) in fig.edges) {
+            drawLine(
+                lineColor,
+                Offset(px(fig.pts[a * 2]), py(fig.pts[a * 2 + 1])),
+                Offset(px(fig.pts[b * 2]), py(fig.pts[b * 2 + 1])),
+                0.6.dp.toPx()
+            )
+        }
+        for (i in 0 until fig.pts.size / 2) {
+            drawCircle(lineColor, 0.7.dp.toPx(), Offset(px(fig.pts[i * 2]), py(fig.pts[i * 2 + 1])))
+        }
+    }
+}
+
+/** 18dp 脉冲星轨小图标：弧线 + 端点星。 */
+@Composable
+private fun StarTrailIcon(red: Boolean) {
+    val color = Color(0xFF70D6FF).redLightSafe(red)
+    androidx.compose.foundation.Canvas(Modifier.size(18.dp)) {
+        val stroke = 1.dp.toPx()
+        val r = 6.5.dp.toPx()
+        val c = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+        drawArc(
+            color = color,
+            startAngle = 200f,
+            sweepAngle = 260f,
+            useCenter = false,
+            topLeft = androidx.compose.ui.geometry.Offset(c.x - r, c.y - r),
+            size = Size(r * 2, r * 2),
+            style = Stroke(width = stroke)
+        )
+        // 弧端星点（200° 端）
+        val a = Math.toRadians(200.0)
+        drawCircle(color, 1.4.dp.toPx(), Offset(c.x + r * kotlin.math.cos(a).toFloat(), c.y + r * kotlin.math.sin(a).toFloat()))
     }
 }

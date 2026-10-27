@@ -97,7 +97,7 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
     var showMilkyWay by mutableStateOf(true)
     var showConstellations by mutableStateOf(true)
     var showMessier by mutableStateOf(true)
-    var showTrajectory by mutableStateOf(false) // 临时关闭用于定位 qemu 崩溃源
+    var showTrajectory by mutableStateOf(true)
     var showSatellites by mutableStateOf(true)
     var showMeteorShowers by mutableStateOf(true)
 

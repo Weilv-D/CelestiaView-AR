@@ -11,9 +11,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -90,47 +91,133 @@ fun GlassCard(
 }
 
 /**
- * 2. 精密遥测数据单元格：等宽 tnum 大数字 + 字距展开的小标签。
+ * 2. 遥测数据行：等宽 tnum 数值 + 小标签，以 0.4dp 极细分割线组织层级。
  */
 @Composable
-fun TelemetryMetricBox(
+fun Hairline(modifier: Modifier = Modifier, redLight: Boolean = false) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(0.4.dp)
+            .background(Color(0x18FFFFFF).redLightSafe(redLight))
+    )
+}
+
+@Composable
+fun TelemetryMetricRow(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    unit: String = "",
     redLight: Boolean = false
 ) {
-    GlassCard(
-        modifier = modifier,
-        cornerRadius = 16.dp,
-        redLight = redLight,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = label.uppercase(),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.0.sp,
+            color = CelestialPalette.TextMuted.redLightSafe(redLight)
+        )
+        Text(
+            text = value,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Light,
+            style = TextStyle(fontFeatureSettings = "tnum"),
+            fontFamily = FontFamily.Monospace,
+            color = CelestialPalette.TextPrimary.redLightSafe(redLight)
+        )
+    }
+}
+
+/**
+ * 无框文字按钮：激活态亮起星轨青白 + 底部 2dp 光点。
+ */
+@Composable
+fun NakedTextButton(
+    text: String,
+    selected: Boolean,
+    redLight: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val tint = (if (selected) Color(0xFFE6F4FF) else Color(0x739AB2D6)).redLightSafe(redLight)
+    Column(
+        modifier
+            .clickable { onClick() }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = label.uppercase(),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.2.sp,
-                color = CelestialPalette.TextMuted.redLightSafe(redLight)
-            )
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = value,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Light,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                    fontFamily = FontFamily.Monospace,
-                    color = CelestialPalette.TextPrimary.redLightSafe(redLight)
+        Text(
+            text,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = tint
+        )
+        Spacer(Modifier.height(3.dp))
+        Box(Modifier.height(2.dp)) {
+            if (selected) {
+                Box(
+                    Modifier
+                        .width(14.dp)
+                        .height(2.dp)
+                        .background(Color(0xFF64D2FF).redLightSafe(redLight), RoundedCornerShape(1.dp))
                 )
-                if (unit.isNotEmpty()) {
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = unit,
-                        fontSize = 11.sp,
-                        color = CelestialPalette.AccentCyan.redLightSafe(redLight)
+            }
+        }
+    }
+}
+
+/**
+ * 无框船坞操作项：20dp 图标 + 10sp 双字标签；激活态图标背后 32dp 微光圆晕
+ * 与正下方 2dp 发光星点，未激活态为静谧暗夜灰蓝，全程无背景无描边。
+ */
+@Composable
+fun DockItem(
+    icon: ImageVector,
+    label: String,
+    active: Boolean,
+    redLight: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    val tint = (if (active) Color(0xFFE6F4FF) else Color(0x739AB2D6)).redLightSafe(redLight)
+    Column(
+        modifier
+            .clickable { onClick() }
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (active) {
+                // 图标中心微光圆晕（显式有限 center/radius 的径向渐变）
+                androidx.compose.foundation.Canvas(Modifier.size(32.dp)) {
+                    val r = 16.dp.toPx().coerceIn(2f, 500f)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0x2864D2FF).redLightSafe(redLight), Color.Transparent),
+                            center = androidx.compose.ui.geometry.Offset(r, r),
+                            radius = r
+                        )
                     )
                 }
+            }
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = tint,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(label, fontSize = 10.sp, color = tint)
+        Spacer(Modifier.height(2.dp))
+        Box(Modifier.height(2.dp)) {
+            if (active) {
+                Box(
+                    Modifier
+                        .size(2.dp)
+                        .background(Color(0xFF64D2FF).redLightSafe(redLight), RoundedCornerShape(1.dp))
+                )
             }
         }
     }

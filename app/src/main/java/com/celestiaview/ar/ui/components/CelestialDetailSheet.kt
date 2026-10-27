@@ -184,7 +184,7 @@ fun CelestialDetailSheet(
                         ),
                         red
                     )
-                    // SpectrumBar(s.bv, red) // 二分定位: 暂时移除
+                    SpectrumBar(s.bv, red)
                 }
                 is CelestialTarget.PlanetTarget -> {
                     val p = f.planets.firstOrNull { it.meta.key == target.key }
@@ -287,22 +287,24 @@ private fun SectionTitle(t: String, color: androidx.compose.ui.graphics.Color) {
 
 @Composable
 private fun TelemetryGrid(items: List<Pair<String, String>>, red: Boolean) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column {
         items.chunked(2).forEach { rowItems ->
-            Row(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
                 rowItems.forEach { (k, v) ->
-                    TelemetryMetricBox(
+                    TelemetryMetricRow(
                         label = k,
                         value = v,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(0.dp),
+                        modifier = Modifier.weight(1f),
                         redLight = red
                     )
-                    if (rowItems.size == 1) Spacer(Modifier.weight(1f))
-                    else Spacer(Modifier.width(6.dp))
                 }
+                if (rowItems.size == 1) Spacer(Modifier.weight(1f))
             }
+            Hairline(redLight = red)
         }
     }
 }

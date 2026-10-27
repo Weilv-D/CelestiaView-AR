@@ -9,8 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.ui.unit.dp
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.render.SkyCanvasRenderer
@@ -20,10 +18,8 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * 屏幕中心动态光学准星（徕卡取景器 / JWST 精密几何）：
- * - 38dp 刻度环：30° 分段 / 6° 呼吸缺口 / 24 秒顺时针一周；
- * - 内圈四段 45° 锁定弧：吸附时 spring 收缩至 14dp 包裹目标；
- * - 中心微距十字：4dp 净空 + 5dp 极细准线；
+ * 屏幕中心光学准星（极简微光几何）：
+ * - 52dp 同心微光细环（0.5dp）+ 四方位刻度针 + 中心 1.5dp 微光白点；
  * - 3.5° 吸附四角括号 + HUD 抬头标签 + 360° 离轴寻星引导箭头。
  *
  * 零分配约定：Path / RectF / Paint 均为 remember 预分配，逐帧 rewind + 改参复用。
@@ -62,84 +58,46 @@ fun TargetReticleOverlay(
     }
     val paints = remember { ReticlePaints() }
 
-    // 内圈锁定弧半径：吸附时 spring 收缩至 14dp 包裹目标（composable 作用域动画）
-    val snappedNow = vm.snapped != null
-    val lockArcRadius by animateDpAsState(
-        targetValue = if (snappedNow) 14.dp else 22.dp,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
-        label = "lockArcR"
-    )
-
     Canvas(modifier.fillMaxSize()) {
         // 读取 frameTick：与主渲染同帧重绘
         vm.frameTick
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
+        val cx = size.width / 2f
+        val cy = size.height / 2f
         val dp = density.density
         val accent = if (vm.redLight) DeepSpacePalette.RedSafePrimary else CelestialPalette.AccentCyan
         val accentArgb = accent.toArgbInt()
-        val timeSec = System.nanoTime() / 1e9f
         val n = drawContext.canvas.nativeCanvas
         val p = paints
 
-        // ---------- 中心准星：徕卡取景器 / JWST 精密几何 ----------
-        val lockR = lockArcRadius.toPx()
-        // 外圈刻度环：38dp / 0.8dp / 每 30° 留 6° 呼吸缺口 / 24s 顺时针
-        val tickR = 38f * dp
-        val segDeg = 30f
-        val gapDeg = 6f
-        val rotDeg = (timeSec * 360f / 24f) % 360f // 24 秒一整圈
-        val arc = p.arcPaint
-        arc.color = accentArgb
-        arc.alpha = (0.55f * 255f).toInt()
-        arc.strokeWidth = 0.8f * dp
+        // ---------- 中心准星：52dp 微光同心环 + 方位刻度针 + 中心微光点 ----------
+        val ringR = 26f * dp
+        val ring = p.arcPaint
+        ring.color = accentArgb
+        ring.alpha = (0.22f * 255f).toInt()
+        ring.strokeWidth = 0.5f * dp
+        n.drawCircle(cx, cy, ringR, ring)
+
+        // 四方位刻度针（环外 1.5dp → 4.5dp）
         val tickLine = p.linePaint
         tickLine.color = accentArgb
-        tickLine.alpha = (0.8f * 255f).toInt()
-        tickLine.strokeWidth = 1.1f * dp
-        var k = 0
-        while (k * segDeg < 360f) {
-            val start = k * segDeg + rotDeg
-            val sweep = segDeg - gapDeg
-            p.rectF.set(cx - tickR, cy - tickR, cx + tickR, cy + tickR)
-            n.drawArc(p.rectF, start, sweep, false, arc)
-            // 每 30° 一枚主刻度短线
-            val a = Math.toRadians((start + sweep / 2).toDouble())
-            val r1 = tickR - 3.5f * dp
+        tickLine.alpha = (0.5f * 255f).toInt()
+        tickLine.strokeWidth = 0.8f * dp
+        for (q in 0 until 4) {
+            val a = q * (Math.PI / 2.0)
+            val ca = cos(a).toFloat(); val sa = sin(a).toFloat()
             n.drawLine(
-                cx + r1 * cos(a).toFloat(), cy + r1 * sin(a).toFloat(),
-                cx + tickR * cos(a).toFloat(), cy + tickR * sin(a).toFloat(),
+                cx + (ringR + 1.5f * dp) * ca, cy + (ringR + 1.5f * dp) * sa,
+                cx + (ringR + 4.5f * dp) * ca, cy + (ringR + 4.5f * dp) * sa,
                 tickLine
             )
-            k++
         }
 
-        // 内圈锁定弧：四段 45° 圆弧（锁定时收缩包裹目标）
-        val snapCenter = renderer.overlay.snappedScreen
-        val arcCx = snapCenter?.x ?: cx
-        val arcCy = snapCenter?.y ?: cy
-        val lock = p.roundArcPaint
-        lock.color = accentArgb
-        lock.alpha = (0.8f * 255f).toInt()
-        lock.strokeWidth = 1.5f * dp
-        p.rectF.set(arcCx - lockR, arcCy - lockR, arcCx + lockR, arcCy + lockR)
-        for (q in 0 until 4) {
-            n.drawArc(p.rectF, q * 90f + 6f, 45f, false, lock)
-        }
-
-        // 中心微距十字：中心 4dp 净空（不遮挡被瞄准的星），四周 5dp 极细准线
-        val clearR = 4f * dp
-        val tickLen = 5f * dp
-        val cross = p.linePaint
-        cross.color = accentArgb
-        cross.alpha = (0.85f * 255f).toInt()
-        cross.strokeWidth = 1f * dp
-        n.drawLine(cx - clearR - tickLen, cy, cx - clearR, cy, cross)
-        n.drawLine(cx + clearR, cy, cx + clearR + tickLen, cy, cross)
-        n.drawLine(cx, cy - clearR - tickLen, cx, cy - clearR, cross)
-        n.drawLine(cx, cy + clearR, cx, cy + clearR + tickLen, cross)
+        // 中心微光白点：柔晕 + 1.5dp 白点
+        val dot = p.fillPaint
+        dot.color = 0x33FFFFFF.toInt()
+        n.drawCircle(cx, cy, 3.5f * dp, dot)
+        dot.color = 0xE6FFFFFF.toInt()
+        n.drawCircle(cx, cy, 1.5f * dp, dot)
 
         val ov = renderer.overlay
 
