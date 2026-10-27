@@ -1,4 +1,4 @@
-# Aetheris · 苍穹之境 (CelestiaView AR)
+# Aetheris · 无界苍穹 (CelestiaView AR)
 
 > Android AR 实时星空应用 —— 精密天体物理计算 · 传感器四元数融合 · 程序化天体光学渲染 · 磨砂玻璃交互 · 东方古星官体系
 
