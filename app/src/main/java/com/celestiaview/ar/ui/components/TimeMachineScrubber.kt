@@ -54,7 +54,7 @@ fun TimeMachineScrubber(
 ) {
     if (!expanded) return
     val red = vm.redLight
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
+    val accent = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF94A3B8)
 
     GlassPanel(
         Modifier

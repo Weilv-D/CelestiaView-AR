@@ -29,30 +29,32 @@ class AstrophotoRepositoryTest {
     }
 
     @Test
-    fun `羽化曲线在 0_55 内保持全透明度且平滑衰减到 1 归零`() {
-        assertEquals(1f, AstrophotoRepository.featherAlpha01(0f), 0f)
-        assertEquals(1f, AstrophotoRepository.featherAlpha01(0.55f), 1e-6f)
-        assertEquals(0.5f, AstrophotoRepository.featherAlpha01(0.775f), 1e-3f) // cos(π/2)=0
-        assertEquals(0f, AstrophotoRepository.featherAlpha01(1f), 1e-6f)
-        assertEquals(0f, AstrophotoRepository.featherAlpha01(1.41f), 0f) // 角点钳制
+    fun `无痕脱底曲线中心饱和边缘归零且单调`() {
+        // 中心全亮度：余弦窗口 = 1、亮度律 1^0.75×1.5 → 钳制为 1
+        assertEquals(1f, AstrophotoRepository.seamlessAlpha01(0f, 1f), 1e-6f)
+        // 边缘归零（余弦窗口收口）
+        assertEquals(0f, AstrophotoRepository.seamlessAlpha01(1f, 1f), 1e-6f)
+        // 死黑像素质地透明（脱黑底）
+        assertEquals(0f, AstrophotoRepository.seamlessAlpha01(0f, 0f), 1e-6f)
+        // 中段半亮度（亮度律 ^0.75×1.5 增益复合：0.25^0.75≈0.354×1.5≈0.53）
+        val mid = AstrophotoRepository.seamlessAlpha01(0f, 0.25f)
+        assertTrue("半亮度 alpha 应在 (0,0.6) 区间: $mid", mid in 0.01f..0.6f)
         // 单调递减
         var prev = 1f
-        var d = 0.56f
+        var d = 0f
         while (d <= 1f) {
-            val a = AstrophotoRepository.featherAlpha01(d)
+            val a = AstrophotoRepository.seamlessAlpha01(d, 0.8f)
             assertTrue("alpha 应单调递减 d=$d", a <= prev + 1e-6f)
             prev = a
-            d += 0.02f
+            d += 0.05f
         }
     }
 
     @Test
-    fun `死黑底色亮度阈值映射`() {
-        assertEquals(0f, AstrophotoRepository.darkSkyAlpha01(0), 0f)
-        assertEquals(0f, AstrophotoRepository.darkSkyAlpha01(8), 0f)
-        assertEquals(0.5f, AstrophotoRepository.darkSkyAlpha01(28), 1e-6f)
-        assertEquals(1f, AstrophotoRepository.darkSkyAlpha01(48), 1e-6f)
-        assertEquals(1f, AstrophotoRepository.darkSkyAlpha01(230), 0f)
+    fun `环境底色抬黑位与保底 38 取大`() {
+        assertEquals(38, AstrophotoRepository.pedestalChannel(10))
+        assertEquals(38, AstrophotoRepository.pedestalChannel(38))
+        assertEquals(90, AstrophotoRepository.pedestalChannel(90))
     }
 
     @Test

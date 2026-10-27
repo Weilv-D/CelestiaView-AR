@@ -65,7 +65,7 @@ fun TonightSkyGuideSheet(
     onGuide: (CelestialTarget) -> Unit
 ) {
     val red = vm.redLight
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
+    val accent = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF94A3B8)
     val f = vm.frame
     val tick = vm.frameTick
 

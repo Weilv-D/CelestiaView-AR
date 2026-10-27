@@ -76,8 +76,20 @@ class LocationProvider(private val context: Context) {
         return fine || coarse
     }
 
+    /** 最近一次 GPS 源定位时刻：新鲜 GPS 定位存在时忽略网络源，杜绝双源站点乒乓。 */
+    @Volatile
+    private var lastGpsFixMillis = 0L
+
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            // GPS 源优先：10 分钟内有 GPS 定位时，网络源（运营商/缓存，可能来自异地）不覆盖
+            val fromGps = location.provider == LocationManager.GPS_PROVIDER
+            val now = System.currentTimeMillis()
+            if (fromGps) {
+                lastGpsFixMillis = now
+            } else if (now - lastGpsFixMillis < 10 * 60_000L) {
+                return
+            }
             val name = if (location.latitude < -60) "南极观测点"
             else "GPS 实时定位"
             altitudeMeters = location.altitude.coerceAtLeast(-100.0)

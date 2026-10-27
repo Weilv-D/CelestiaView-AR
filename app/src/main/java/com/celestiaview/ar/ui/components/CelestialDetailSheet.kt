@@ -69,7 +69,7 @@ fun CelestialDetailSheet(
 ) {
     val target = vm.selected ?: return
     val red = vm.redLight
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
+    val accent = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF94A3B8)
     val f = vm.frame
 
     Column(
@@ -417,7 +417,7 @@ private fun AltitudeCurve24hChart(
         .redLightSafe(red)
     val riseColor = DeepSpacePalette.RiseGreen.redLightSafe(red)
     val setColor = DeepSpacePalette.SetOrange.redLightSafe(red)
-    val transitColor = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFFF5C543)
+    val transitColor = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF94A3B8)
     val gridColor = Color(0x3DFFFFFF).redLightSafe(red)
     val nowColor = Color(0xFFF8FAFC).redLightSafe(red)
 

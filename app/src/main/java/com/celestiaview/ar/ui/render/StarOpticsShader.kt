@@ -70,39 +70,79 @@ object StarOpticsShader {
 
     private const val WHITE = 0xFFFFFFFF.toInt()
 
-    /** L1 广域大气散射柔光：径向衰减剖面 (1 → 0.227 → 0) @ (0, 0.5, 1)。 */
+    /**
+     * 8 阶指数衰减高斯光晕剖面：中心 1.0 → 0.1 处 0.6 → 0.25 处 0.2 →
+     * 0.5 处 0.04 → 1.0 处 0。肉眼看不到任何圆圈边界（杜绝"白心灰圈"）。
+     *
+     * 软 GPU (angle_indirect / swiftshader / guest) 安全铁律：多阶径向渐变着色器
+     * 走逐帧 GPU 管线会击穿模拟器渲染进程（宿主段错误），因此剖面在类加载时
+     * 以软件画布一次性预烘焙为位图精灵，逐帧只做 drawBitmap 纹理块传输。
+     */
+    private val GAUSS_POS = floatArrayOf(
+        0f, 0.10f, 0.25f, 0.40f, 0.50f, 0.65f, 0.80f, 1f
+    )
+    private val GAUSS_ALPHA = floatArrayOf(
+        1f, 0.60f, 0.20f, 0.08f, 0.04f, 0.015f, 0.005f, 0f
+    )
+    private val GAUSS_COLORS = intArrayOf(
+        WHITE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE
+    )
+    private const val SPRITE_SIZE = 128
+    private const val SPRITE_HALF = SPRITE_SIZE * 0.5f
+
+    /** 8 阶高斯光晕位图精灵（软件画布烘焙， alpha 即径向衰减剖面）。 */
+    private val gaussSprite: android.graphics.Bitmap by lazy {
+        val bmp = android.graphics.Bitmap.createBitmap(
+            SPRITE_SIZE, SPRITE_SIZE, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        val canvas = android.graphics.Canvas(bmp) // 软件画布：烘焙零 GPU 参与
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                SPRITE_HALF, SPRITE_HALF, SPRITE_HALF,
+                GAUSS_COLORS, GAUSS_POS, Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawCircle(SPRITE_HALF, SPRITE_HALF, SPRITE_HALF, paint)
+        bmp
+    }
+
+    /**
+     * 光晕精灵绘制 Paint：直接 SRC_OVER 叠加。
+     * 软 GPU (angle_indirect) 上 drawBitmap 的 xfermode ADD 会被忽略而回退
+     * SRC_OVER，白色精灵随即呈灰盘荷包蛋——故剖面全部内建于位图 alpha，
+     * 不依赖任何混合模式。
+     */
     private val haloPaint: Paint by lazy {
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(
-                0f, 0f, 1f,
-                intArrayOf(WHITE, WHITE, WHITE),
-                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP
-            )
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
-        }
+        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     }
 
-    /** L2 内层高亮冕环：衰减剖面 (1 → 0.2 → 0)。 */
-    private val coronaPaint: Paint by lazy {
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(
-                0f, 0f, 1f,
-                intArrayOf(WHITE, WHITE, WHITE),
-                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP
-            )
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
-        }
-    }
-
-    /** 通用柔光精灵（日落辉光 / 银心增强 / 行星光球 / 月晕）。 */
+    /** 通用柔光精灵（日落辉光 / 银心增强 / 行星光球 / 月晕）：同一 8 阶精灵。 */
     private val glowPaint: Paint by lazy {
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(
-                0f, 0f, 1f,
-                intArrayOf(WHITE, WHITE, WHITE),
-                floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP
-            )
-        }
+        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    }
+
+    /**
+     * 高斯光晕精灵原生绘制（零分配）：半径 [radiusPx] 的 8 阶指数衰减柔光，
+     * alpha 通道即剖面；[additive] 为真时加色混合（星光），否则标准覆盖。
+     */
+    private fun drawGaussSpriteN(
+        n: Canvas,
+        cx: Float,
+        cy: Float,
+        radiusPx: Float,
+        colorArgb: Int,
+        alpha01: Float,
+        @Suppress("UNUSED_PARAMETER") additive: Boolean
+    ) {
+        if (radiusPx < 0.5f) return
+        val p = haloPaint
+        p.color = colorArgb
+        p.alpha = (alpha01.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+        n.save()
+        n.translate(cx, cy)
+        n.scale(radiusPx / SPRITE_HALF, radiusPx / SPRITE_HALF)
+        n.drawBitmap(gaussSprite, -SPRITE_HALF, -SPRITE_HALF, p)
+        n.restore()
     }
 
     /** 衍射星芒：单位长度水平渐变（配合画布 translate+scale 复用）。 */
@@ -164,30 +204,15 @@ object StarOpticsShader {
         val alpha = twinkleAlpha.coerceIn(0.25f, 1f)
         val r = coreRadiusPx
 
-        // L1 广域大气散射柔光（仅亮星）：画布缩放复用单位径向渐变
+        // L1 广域大气散射柔光（仅亮星）：8 阶高斯精灵加色混合
         if (mag < 2.5) {
             val haloR = r * 5.5f * haloScale
-            val p = haloPaint
-            p.color = colorArgb
-            p.alpha = (0.22f * alpha * 255f).toInt().coerceIn(0, 255)
-            n.save()
-            n.translate(cx, cy)
-            n.scale(haloR, haloR)
-            n.drawCircle(0f, 0f, 1f, p)
-            n.restore()
+            drawGaussSpriteN(n, cx, cy, haloR, colorArgb, 0.22f * alpha, additive = true)
         }
 
         // L2 内层高亮冕环
         val coronaR = r * 2.2f
-        coronaPaint.let { p ->
-            p.color = colorArgb
-            p.alpha = (0.75f * alpha * 255f).toInt().coerceIn(0, 255)
-            n.save()
-            n.translate(cx, cy)
-            n.scale(coronaR, coronaR)
-            n.drawCircle(0f, 0f, 1f, p)
-            n.restore()
-        }
+        drawGaussSpriteN(n, cx, cy, coronaR, colorArgb, 0.75f * alpha, additive = true)
 
         // L3 望远镜十字衍射星芒（仅一等亮星）
         if (mag < 1.2) {
@@ -246,14 +271,7 @@ object StarOpticsShader {
         colorArgb: Int,
         alpha01: Float
     ) {
-        val p = glowPaint
-        p.color = colorArgb
-        p.alpha = (alpha01.coerceIn(0f, 1f) * 255f).toInt()
-        n.save()
-        n.translate(cx, cy)
-        n.scale(radiusPx, radiusPx)
-        n.drawCircle(0f, 0f, 1f, p)
-        n.restore()
+        drawGaussSpriteN(n, cx, cy, radiusPx, colorArgb, alpha01, additive = false)
     }
 
     /**

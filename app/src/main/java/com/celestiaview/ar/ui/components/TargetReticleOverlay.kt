@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.celestiaview.ar.ui.SkyViewModel
+import com.celestiaview.ar.ui.equatorialFromHorizontalSafe
 import com.celestiaview.ar.ui.render.SkyCanvasRenderer
 import com.celestiaview.ar.ui.theme.CelestialPalette
 import com.celestiaview.ar.ui.theme.DeepSpacePalette
@@ -149,18 +150,38 @@ fun TargetReticleOverlay(
             bracketPaint.alpha = 255
             bracketPaint.strokeWidth = 1.6f * dp
             n.drawPath(bp, bracketPaint)
+        }
 
-            // HUD 抬头标签
-            textPaint.color = android.graphics.Color.argb(255, 255, 224, 130)
-            if (vm.redLight) textPaint.color = android.graphics.Color.rgb(255, 138, 128)
-            textPaint.textSize = 12f * dp
-            textPaint.isFakeBoldText = true
-            n.drawText(ov.snappedLabel, snapScreen.x + half + 8f * dp, snapScreen.y - 4f * dp, textPaint)
-            textPaint.color = android.graphics.Color.argb(200, 180, 197, 230)
-            if (vm.redLight) textPaint.color = android.graphics.Color.argb(200, 255, 138, 128)
-            textPaint.textSize = 10f * dp
-            textPaint.isFakeBoldText = false
-            n.drawText(ov.snappedDetail, snapScreen.x + half + 8f * dp, snapScreen.y + 10f * dp, textPaint)
+        // ---------- 准星两侧对称等宽小字：左 RA / 右 DEC（半透明纯白，11sp） ----------
+        // 聚焦态由 3D 特写的双星旁注接管坐标显示，准星小字整段让位防重叠
+        if (!vm.focusMode) {
+        val coordTarget = vm.snapped?.target
+        val raDeg: Double
+        val decDeg: Double
+        if (coordTarget != null) {
+            raDeg = coordTarget.raDeg; decDeg = coordTarget.decDeg
+        } else {
+            val eq = com.celestiaview.ar.core.math.AstrometryEngine.equatorialFromHorizontalSafe(
+                vm.boresight.altDeg, vm.boresight.azDeg,
+                vm.frame.lstDeg, vm.frame.latitudeDeg
+            )
+            raDeg = eq.raDeg; decDeg = eq.decDeg
+        }
+        textPaint.typeface = android.graphics.Typeface.MONOSPACE
+        textPaint.isFakeBoldText = false
+        textPaint.textSize = 11f * dp
+        val raCol = if (vm.redLight) android.graphics.Color.argb(170, 255, 138, 128)
+        else android.graphics.Color.argb(170, 241, 245, 249)
+        textPaint.color = raCol
+        val rh = raDeg / 15.0
+        val raText = "RA %02dh %02dm".format(rh.toInt(), ((rh * 60) % 60).toInt())
+        val sign = if (decDeg < 0) "-" else "+"
+        val ad = kotlin.math.abs(decDeg)
+        val decText = "DEC %s%02d° %02d′".format(sign, ad.toInt(), ((ad * 60) % 60).toInt())
+        val raW = textPaint.measureText(raText)
+        n.drawText(raText, cx - 52f * dp - raW, cy + 4f * dp, textPaint)
+        n.drawText(decText, cx + 52f * dp, cy + 4f * dp, textPaint)
+        textPaint.typeface = android.graphics.Typeface.SANS_SERIF
         }
 
         // ---------- 360° 离轴引导箭头 ----------
@@ -193,13 +214,16 @@ fun TargetReticleOverlay(
             arrowPaint.color = accentArgb
             n.drawPath(ap, arrowPaint)
 
-            // 角距倒计时文本
-            textPaint.color = android.graphics.Color.argb(235, 255, 224, 130)
-            if (vm.redLight) textPaint.color = android.graphics.Color.rgb(255, 138, 128)
+            // 角距倒计时文本（半透明白等宽小字）
+            textPaint.typeface = android.graphics.Typeface.MONOSPACE
+            textPaint.isFakeBoldText = false
+            textPaint.color = if (vm.redLight) android.graphics.Color.argb(200, 255, 138, 128)
+            else android.graphics.Color.argb(200, 241, 245, 249)
             textPaint.textSize = 11f * dp
-            val txt = "目标：${ov.guideName} · 偏转 %.1f°".format(ov.guideSepDeg!!)
+            val txt = "${ov.guideName} · %.1f°".format(ov.guideSepDeg!!)
             val tw = textPaint.measureText(txt)
             n.drawText(txt, cx - tw / 2, cy + 70f * dp, textPaint)
+            textPaint.typeface = android.graphics.Typeface.SANS_SERIF
         } else if (ov.guideScreen != null && ov.guideSepDeg != null) {
             // 目标已入镜：锁定脉冲
             val t = (System.nanoTime() / 1e9f) % 1.2f

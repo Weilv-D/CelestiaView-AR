@@ -156,21 +156,22 @@ class AstrophotoRepository(context: Context) {
         }
 
         /**
-         * 径向羽化曲线：归一化半径 d ≤ 0.55 全透明度保持 1，
-         * d ∈ (0.55, 1] 按平滑余弦 (1 + cos(π·(d-0.55)/0.45)) / 2 衰减到 0。
+         * 无痕星云脱底管线（纯函数可测）：
+         * @param dist01 归一化半径 t = dist / maxR ∈ [0,1]（maxR = 内切圆 × 0.82）
+         * @param luma01 脱底后的相对亮度 luma / 217
+         * @return 0..1 的像素 alpha：亮度律 luma^0.75 × 余弦窗口 × 三次衰减，上限增益 1.5
          */
-        fun featherAlpha01(d: Float): Float = when {
-            d <= FEATHER_START -> 1f
-            d >= 1f -> 0f
-            else -> ((1f + cos(PI * ((d - FEATHER_START) / (1f - FEATHER_START)).toDouble()).toFloat()) / 2f)
-                .coerceIn(0f, 1f)
+        fun seamlessAlpha01(dist01: Float, luma01: Float): Float {
+            val t = dist01.coerceIn(0f, 1f)
+            val window = (0.5f * (1f + cos(PI * t).toFloat()))
+            val radialFade = (window * (1f - t * t)).coerceAtLeast(0f)
+            val fade15 = radialFade * kotlin.math.sqrt(radialFade)
+            val a = Math.pow(luma01.coerceAtLeast(0f).toDouble(), 0.75).toFloat() * fade15 * 1.5f
+            return a.coerceIn(0f, 1f)
         }
 
-        /** 死黑底色透明化：亮度 8 以下全透明，8→48 平滑过渡到不透明。 */
-        fun darkSkyAlpha01(luminance: Int): Float =
-            ((luminance - 8) / 40f).coerceIn(0f, 1f)
-
-        private const val FEATHER_START = 0.55f
+        /** 环境底色抬黑位：四角采样均值与保底黑位 38 取大。 */
+        fun pedestalChannel(sampledAvg: Int): Int = maxOf(sampledAvg, 38)
 
         /**
          * 数据源 B：行星与经典深空天体高清摄影精选表（NASA / ESA 公共领域，经 Wikimedia）。
@@ -212,37 +213,54 @@ class AstrophotoRepository(context: Context) {
         )
 
         /**
-         * 离屏像素级径向羽化：以图心为基准，归一化半径超出 0.55 后余弦衰减透明，
-         * 同时将死黑底色转化为透明通道；消除方形照片边框。
+         * 无痕实拍脱底：四角环境底色采样（消除 DSS2 灰蓝底雾）→ 保底黑位 38
+         * 压制残余底噪 → maxR 收缩至内切圆 82%（四角必在半径外）→ 余弦窗口 +
+         * 三次方衰减 → 预乘 Alpha 输出。星云像长在宇宙深处一样自然浮现，
+         * 无任何方形边框或灰底痕迹。
          */
-        fun applyRadialFeatherMask(src: Bitmap): Bitmap {
-            val w = src.width
-            val h = src.height
-            val out = if (src.config == Bitmap.Config.ARGB_8888) src.copy(Bitmap.Config.ARGB_8888, true)
-            else src.copy(Bitmap.Config.ARGB_8888, true)
-            val cx = w / 2f
-            val cy = h / 2f
-            val maxR = min(w, h) / 2f
-            val pixels = IntArray(w * h)
-            out.getPixels(pixels, 0, w, 0, 0, w, h)
-            for (y in 0 until h) {
-                val dy = y - cy
-                for (x in 0 until w) {
-                    val i = y * w + x
-                    val p = pixels[i]
-                    val d = hypot((x - cx).toDouble(), dy.toDouble()).toFloat() / maxR
-                    if (d <= FEATHER_START) continue
-                    val r = (p shr 16) and 0xFF
-                    val g = (p shr 8) and 0xFF
-                    val b = p and 0xFF
-                    val lum = (r * 30 + g * 59 + b * 11) / 100
-                    val a = ((p ushr 24).toFloat() *
-                        featherAlpha01(d) * darkSkyAlpha01(lum)).toInt().coerceIn(0, 255)
-                    pixels[i] = (a shl 24) or (p and 0x00FFFFFF)
+        fun processSeamlessAstrophoto(src: Bitmap): Bitmap {
+            val width = src.width
+            val height = src.height
+            val pixels = IntArray(width * height)
+            src.getPixels(pixels, 0, width, 0, 0, width, height)
+            val cx = width * 0.5f
+            val cy = height * 0.5f
+            val maxR = minOf(cx, cy) * 0.82f
+
+            // 步骤 1：四角各 5×5 采样环境底色均值，与保底黑位 38 取大
+            var bgR = 0L; var bgG = 0L; var bgB = 0L; var n = 0
+            for (cy0 in listOf(0, height - 5)) for (cx0 in listOf(0, width - 5))
+                for (dy in 0 until 5) for (dx in 0 until 5) {
+                    val c = pixels[(cy0 + dy) * width + (cx0 + dx)]
+                    bgR += (c shr 16 and 0xFF); bgG += (c shr 8 and 0xFF); bgB += (c and 0xFF); n++
                 }
+            val pedR = pedestalChannel((bgR / n).toInt())
+            val pedG = pedestalChannel((bgG / n).toInt())
+            val pedB = pedestalChannel((bgB / n).toInt())
+
+            // 步骤 2：逐像素脱黑底 + 余弦径向消隐 + 预乘 Alpha
+            for (y in 0 until height) for (x in 0 until width) {
+                val idx = y * width + x
+                val dx = x - cx; val dy = y - cy
+                val dist = hypot(dx, dy)
+                if (dist >= maxR) { pixels[idx] = 0x00000000; continue }
+                val c = pixels[idx]
+                val r = ((c shr 16 and 0xFF) - pedR).coerceAtLeast(0)
+                val g = ((c shr 8 and 0xFF) - pedG).coerceAtLeast(0)
+                val b = ((c and 0xFF) - pedB).coerceAtLeast(0)
+                val luma = (0.299f * r + 0.587f * g + 0.114f * b) / 217f
+                val t = (dist / maxR).coerceIn(0f, 1f)
+                val alpha01 = seamlessAlpha01(t, luma)
+                val alpha = (alpha01 * 255f).toInt().coerceIn(0, 255)
+                val pr = (r * alpha / 255).coerceIn(0, 255)
+                val pg = (g * alpha / 255).coerceIn(0, 255)
+                val pb = (b * alpha / 255).coerceIn(0, 255)
+                pixels[idx] = (alpha shl 24) or (pr shl 16) or (pg shl 8) or pb
             }
-            out.setPixels(pixels, 0, w, 0, 0, w, h)
-            return out
+            return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
         }
+
+        /** 兼容入口：程序化底片与实拍统一走无痕脱底管线。 */
+        fun applyRadialFeatherMask(src: Bitmap): Bitmap = processSeamlessAstrophoto(src)
     }
 }

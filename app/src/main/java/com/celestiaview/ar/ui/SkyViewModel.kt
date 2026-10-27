@@ -18,6 +18,7 @@ import com.celestiaview.ar.core.math.AstrometryEngine.Horizontal
 import com.celestiaview.ar.core.math.PlanetaryEphemeris
 import com.celestiaview.ar.core.math.Quaternion
 import com.celestiaview.ar.core.math.SatelliteTracker
+import com.celestiaview.ar.core.math.SpringAnimator
 import com.celestiaview.ar.core.media.HapticFeedbackManager
 import com.celestiaview.ar.core.media.ProceduralSoundEngine
 import com.celestiaview.ar.core.sensor.AttitudeTracker
@@ -36,6 +37,7 @@ import com.celestiaview.ar.data.model.ObservingSite
 import com.celestiaview.ar.ui.render.AstrophotoPlateGenerator
 import com.celestiaview.ar.ui.render.AstrophotoRepository
 import com.celestiaview.ar.ui.render.AstroRequest
+import com.celestiaview.ar.ui.render.Planet3DRenderer
 import com.celestiaview.ar.ui.render.PlateStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -151,6 +153,14 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
     var focusCrossfade by mutableFloatStateOf(0f)
         private set
 
+    /**
+     * 聚焦过渡进度 0→1（临界阻尼弹簧，绝无过冲）：同步驱动特写盘放大、
+     * 轨道光带自中心向两端展开、星座白描线稿浮现与左下铭牌滑入。
+     */
+    var focusProgress by mutableFloatStateOf(0f)
+        private set
+    private val focusSpring = SpringAnimator(omega0 = 6.0, zeta = 1.0)
+
     /** 聚焦目标为恒星时的星表 id（渲染层据此淡化重叠的矢量星点，避免逐帧字符串比较）。 */
     var focusStarId by mutableIntStateOf(-1)
         private set
@@ -230,9 +240,23 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
     private val snapStars = BrightStarCatalog.stars.filter { it.mag <= 2.6 }
 
     init {
+        // 3D 行星纹理与土星环带预热（IO 线程解码为采样缓冲，渲染线程零 IO）
+        viewModelScope.launch(Dispatchers.IO) {
+            Planet3DRenderer.warmup(getApplication())
+            Planet3DRenderer.warmupRing(getApplication())
+        }
         locationProvider.addCallback(object : LocationProvider.Callback {
             override fun onSiteChanged(site: ObservingSite) {
                 this@SkyViewModel.site = site
+                // 站点更新时正在聚焦：按新站点重解算目标地平坐标并平滑重瞄，
+                // 杜绝 GPS/预设切换导致的目标跳出画面
+                val t = selected
+                if (t != null && focusMode) {
+                    val hz = AstrometryEngine.equatorialToHorizontal(
+                        t.raDeg, t.decDeg, frame.lstDeg, site.latitudeDeg
+                    )
+                    orbit.reAimTo(hz.altDeg, hz.azDeg)
+                }
             }
 
             override fun onGpsStateChanged(state: LocationProvider.GpsState) {
@@ -357,6 +381,11 @@ class SkyViewModel(app: Application) : AndroidViewModel(app) {
         if (focusPhoto != null && focusCrossfade < 1f) {
             focusCrossfade = (focusCrossfade + dtSec.toFloat() * 1.4f).coerceAtMost(1f)
         }
+
+        // 聚焦过渡弹簧推进：特写尺寸 / 轨道光带 / 白描线稿 / 左下铭牌共用
+        focusSpring.target = if (focusMode) 1.0 else 0.0
+        focusSpring.update(dtSec)
+        focusProgress = focusSpring.x.toFloat()
 
         // 退出聚焦后的收尾：视场回到 45° 以上（贴图已完全溶出）才释放实拍资源
         if (!focusMode && focusRequest != null &&

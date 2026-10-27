@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
@@ -49,7 +50,7 @@ fun SearchAndFilterModal(
     onGuide: (CelestialTarget) -> Unit
 ) {
     val red = vm.redLight
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
+    val accent = if (red) DeepSpacePalette.RedSafePrimary else Color(0xFF94A3B8)
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
     val tabs = listOf("亮星", "行星", "星座", "梅西耶")
@@ -200,6 +201,6 @@ private fun RowResult(title: String, sub: String, red: Boolean, onClick: () -> U
             Text(sub, fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.redLightSafe(red))
         }
-        Text("引导 ›", fontSize = 11.sp, color = DeepSpacePalette.AstralGold.redLightSafe(red))
+        Text("引导 ›", fontSize = 11.sp, color = Color(0xFF94A3B8).redLightSafe(red))
     }
 }

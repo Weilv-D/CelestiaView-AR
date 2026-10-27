@@ -1,5 +1,6 @@
 package com.celestiaview.ar.core.sensor
 
+import com.celestiaview.ar.core.math.SpringAnimator
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.max
@@ -7,8 +8,8 @@ import kotlin.math.min
 
 /**
  * 虚拟星图模式的手势轨道控制器：
- * 拖拽平移视线中心、Fling 惯性衰减（指数阻尼）、双指 FOV 阻尼缩放、
- * 聚焦滑航（指数阻尼转向目标天体 + FOV 阻尼推进）。
+ * 拖拽平移视线中心、Fling 惯性衰减（指数阻尼）、双指 FOV 弹簧缩放、
+ * 聚焦滑航（二阶临界阻尼弹簧转向目标天体 + 视场临界阻尼推进）。
  */
 class OrbitTouchController {
 
@@ -25,12 +26,16 @@ class OrbitTouchController {
     private var velAz = 0.0
     private var velAlt = 0.0
 
-    // 双指缩放的平滑目标
-    private var targetFov = 62.0
+    // 聚焦滑航与视场的临界阻尼弹簧（ω₀=8.5, ζ=1.0：柔和加速、丝滑减速、零过冲）
+    private val azSpring = SpringAnimator()
+    private val altSpring = SpringAnimator()
+    private val fovSpring = SpringAnimator(omega0 = 7.0)
 
-    // 聚焦滑航目标（NaN = 无滑航）
-    private var glideAlt = Double.NaN
-    private var glideAz = Double.NaN
+    init {
+        azSpring.jumpTo(centerAzDeg)
+        altSpring.jumpTo(centerAltDeg)
+        fovSpring.jumpTo(fovYDeg)
+    }
 
     /**
      * 拖拽一步。[degPerPx] 由调用方按 degPerPx = fovY / 视口高度换算——
@@ -43,8 +48,8 @@ class OrbitTouchController {
         // 用户接管视线：清除惯性与聚焦滑航
         velAz = 0.0
         velAlt = 0.0
-        glideAlt = Double.NaN
-        glideAz = Double.NaN
+        azSpring.jumpTo(centerAzDeg)
+        altSpring.jumpTo(centerAltDeg)
     }
 
     /** 记录甩动惯性（速度单位：px/s → 度/s）。 */
@@ -53,24 +58,44 @@ class OrbitTouchController {
         velAlt = (-vyPxPerSec * degPerPxY).toDouble().coerceIn(-400.0, 400.0)
     }
 
-    /** 双指缩放：scale > 1 放大（FOV 减小）。带阻尼逼近目标值。 */
+    /** 双指缩放：scale > 1 放大（FOV 减小）。临界阻尼弹簧逼近目标值。 */
     fun onZoom(scaleFactor: Float) {
-        targetFov = (targetFov / scaleFactor).coerceIn(MIN_FOV, MAX_FOV)
+        val target = (targetFov / scaleFactor).coerceIn(MIN_FOV, MAX_FOV)
+        setFovTarget(target)
     }
 
-    /** 聚焦：视线中心指数阻尼滑向目标，FOV 阻尼推进到 [fovDeg]。 */
+    /** 聚焦：视线中心临界阻尼弹簧滑向目标（方位走最短弧），FOV 弹簧推进。 */
     fun glideTo(altDeg: Double, azDeg: Double, fovDeg: Double) {
-        glideAlt = clampAlt(altDeg)
-        glideAz = wrapAz(azDeg)
-        targetFov = fovDeg.coerceIn(MIN_FOV, MAX_FOV)
+        azSpring.jumpTo(centerAzDeg)
+        azSpring.target = centerAzDeg + normalizeDeg180(wrapAz(azDeg) - centerAzDeg)
+        altSpring.jumpTo(centerAltDeg)
+        altSpring.target = clampAlt(altDeg)
+        setFovTarget(fovDeg.coerceIn(MIN_FOV, MAX_FOV))
     }
 
     /** 仅改变 FOV 目标（退出聚焦回广角等）。 */
     fun zoomTo(fovDeg: Double) {
-        targetFov = fovDeg.coerceIn(MIN_FOV, MAX_FOV)
+        setFovTarget(fovDeg.coerceIn(MIN_FOV, MAX_FOV))
     }
 
-    /** 每帧推进：惯性衰减 + 聚焦滑航 + FOV 阻尼。返回是否有残余运动。 */
+    /**
+     * 站点/坐标基准变更时的纯重瞄：只重定视线中心目标，不触碰视场弹簧——
+     * 避免捕获到飞行中的视场值而把变焦冻结在中途。
+     */
+    fun reAimTo(altDeg: Double, azDeg: Double) {
+        azSpring.jumpTo(centerAzDeg)
+        azSpring.target = centerAzDeg + normalizeDeg180(wrapAz(azDeg) - centerAzDeg)
+        altSpring.jumpTo(centerAltDeg)
+        altSpring.target = clampAlt(altDeg)
+    }
+
+    private fun setFovTarget(v: Double) {
+        fovSpring.target = v
+    }
+
+    private val targetFov: Double get() = fovSpring.target
+
+    /** 每帧推进：惯性衰减 + 弹簧滑航 + 视场弹簧。返回是否有残余运动。 */
     fun update(dtSec: Double): Boolean {
         if (dtSec <= 0) return false
         val decay = exp(-dtSec / FLING_TAU)
@@ -83,24 +108,17 @@ class OrbitTouchController {
             velAz = 0.0
             velAlt = 0.0
         }
-        // 聚焦滑航：方位走最短弧；指数因子 1-e^(-dt/τ) 保证高帧率与掉帧时收敛节奏一致
-        if (!glideAlt.isNaN()) {
-            val k = 1.0 - exp(-dtSec / GLIDE_TAU)
-            val azErr = normalizeDeg180(glideAz - centerAzDeg)
-            centerAzDeg = wrapAz(centerAzDeg + azErr * k)
-            centerAltDeg = clampAlt(centerAltDeg + (glideAlt - centerAltDeg) * k)
-            if (abs(azErr) < 0.02 && abs(glideAlt - centerAltDeg) < 0.02) {
-                glideAlt = Double.NaN
-                glideAz = Double.NaN
-            }
+        // 聚焦滑航弹簧推进（掉帧时按子步积分，收敛节奏与帧率无关）
+        val azMoving = azSpring.update(dtSec)
+        val altMoving = altSpring.update(dtSec)
+        if (azMoving || altMoving) {
+            centerAzDeg = wrapAz(azSpring.x)
+            centerAltDeg = clampAlt(altSpring.x)
         }
-        val fovGap = targetFov - fovYDeg
-        if (abs(fovGap) > 0.01) {
-            fovYDeg += fovGap * (1.0 - exp(-dtSec / FOV_TAU))
-        } else {
-            fovYDeg = targetFov
-        }
-        return velAz != 0.0 || velAlt != 0.0 || !glideAlt.isNaN() || abs(fovGap) > 0.01
+        fovSpring.update(dtSec)
+        fovYDeg = fovSpring.x
+        return velAz != 0.0 || velAlt != 0.0 || azMoving || altMoving ||
+            !fovSpring.settled
     }
 
     /** 寻星引导：把视线中心平滑转向目标。 */
@@ -108,11 +126,12 @@ class OrbitTouchController {
         // 直接跳转（由引导箭头完成渐进），仅设定中心
         centerAltDeg = clampAlt(altDeg)
         centerAzDeg = wrapAz(azDeg)
-        targetFov = fovYDeg
+        azSpring.jumpTo(centerAzDeg)
+        altSpring.jumpTo(centerAltDeg)
     }
 
     fun resetFovTarget() {
-        targetFov = fovYDeg
+        fovSpring.target = fovYDeg
     }
 
     private fun wrapAz(az: Double): Double {
@@ -135,10 +154,7 @@ class OrbitTouchController {
         const val MAX_FOV = 110.0
         const val FLING_TAU = 0.22
 
-        /** 聚焦滑航时间常数（秒）。 */
-        const val GLIDE_TAU = 0.28
-
-        /** 视场阻尼推进时间常数（秒）：62°→18° 约 0.3s 的电影式变焦节奏。 */
-        const val FOV_TAU = 0.16
+        /** 视场弹簧固有频率（rad/s）：62°→18° 约 0.5s 的电影式变焦节奏。 */
+        const val FOV_OMEGA = 7.0
     }
 }

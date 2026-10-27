@@ -29,15 +29,16 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.padding
@@ -50,21 +51,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Layers
-import androidx.compose.material.icons.outlined.LocationOn
-import androidx.compose.material.icons.outlined.Nightlight
-import androidx.compose.material.icons.outlined.NightsStay
-import androidx.compose.material.icons.outlined.PhotoCamera
-import androidx.compose.material.icons.outlined.Place
-import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material.icons.outlined.VolumeOff
-import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -83,13 +73,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -108,16 +96,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.celestiaview.ar.core.math.AstrometryEngine
 import com.celestiaview.ar.core.media.SkySnapshotExporter
-import com.celestiaview.ar.data.catalog.BrightStarCatalog
-import com.celestiaview.ar.data.catalog.ConstellationCatalog
 import com.celestiaview.ar.data.catalog.CultureMode
 import com.celestiaview.ar.data.model.CelestialTarget
-import com.celestiaview.ar.data.model.Constellation
+import com.celestiaview.ar.data.model.DsoType
 import com.celestiaview.ar.data.model.ObservingSite
 import com.celestiaview.ar.ui.SkyViewModel
 import com.celestiaview.ar.ui.components.CelestialDetailSheet
-import com.celestiaview.ar.ui.components.DockItem
-import com.celestiaview.ar.ui.components.GlassPanel
+import com.celestiaview.ar.ui.components.GlassCard
 import com.celestiaview.ar.ui.components.NakedTextButton
 import com.celestiaview.ar.ui.components.SearchAndFilterModal
 import com.celestiaview.ar.ui.components.TargetReticleOverlay
@@ -125,7 +110,6 @@ import com.celestiaview.ar.ui.components.TimeMachineScrubber
 import com.celestiaview.ar.ui.components.TonightSkyGuideSheet
 import com.celestiaview.ar.ui.render.SkyCanvasRenderer
 import com.celestiaview.ar.ui.theme.CelestialPalette
-import com.celestiaview.ar.ui.theme.CelestialType
 import com.celestiaview.ar.ui.theme.DeepSpacePalette
 import com.celestiaview.ar.ui.theme.DeepSpaceTheme
 import com.celestiaview.ar.ui.theme.redLightSafe
@@ -223,6 +207,7 @@ private fun SkyApp(
 
     var canvasSizePx by remember { mutableStateOf(IntSize(1080, 2340)) }
 
+    var showMenu by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showTonight by remember {
         mutableStateOf(activity?.intent?.getBooleanExtra("open_guide", false) == true)
@@ -261,11 +246,12 @@ private fun SkyApp(
                 "layers" -> showLayers = true
                 "location" -> showLocation = true
                 "redlight" -> if (!vm.redLight) vm.toggleRedLight()
-                "culture" -> vm.cultureMode = com.celestiaview.ar.data.catalog.CultureMode.CHINESE
-                "culture_dual" -> vm.cultureMode = com.celestiaview.ar.data.catalog.CultureMode.DUAL
+                "culture" -> vm.cultureMode = CultureMode.CHINESE
+                "culture_dual" -> vm.cultureMode = CultureMode.DUAL
                 "reset" -> {
                     vm.select(null); showDetail = false; showTonight = false
                     showSearch = false; showLayers = false; showLocation = false
+                    showMenu = false
                     timeMachineExpanded = false; vm.clearGuide()
                     if (vm.redLight) vm.toggleRedLight()
                 }
@@ -275,10 +261,11 @@ private fun SkyApp(
 
     // 系统返回：二级状态逐级收起，纯主星图才放行退出
     BackHandler(
-        enabled = showDetail || showSearch || showTonight || showLocation || showLayers ||
-            timeMachineExpanded || vm.selected != null || vm.guideTarget != null
+        enabled = showMenu || showDetail || showSearch || showTonight || showLocation ||
+            showLayers || timeMachineExpanded || vm.selected != null || vm.guideTarget != null
     ) {
         when {
+            showMenu -> showMenu = false
             showDetail -> { vm.select(null); showDetail = false }
             showSearch -> showSearch = false
             showTonight -> showTonight = false
@@ -381,7 +368,6 @@ private fun SkyApp(
 
     val red = vm.redLight
     val accent = if (red) DeepSpacePalette.RedSafePrimary else CelestialPalette.AccentCyan
-    val lstH = vm.frame.lstDeg / 15.0
 
     fun captureSnapshot() {
         val size = canvasSizePx
@@ -516,6 +502,14 @@ private fun SkyApp(
                         }
                     )
                 }
+                // 点击星图天体：只触发相机平滑聚焦 + 轨道光带 + 左下铭牌，
+                // 绝不自动弹出百科大卡片（百科由点击铭牌主动展开）
+                .pointerInput(vm.snapped) {
+                    detectTapGestures {
+                        val snap = vm.snapped ?: return@detectTapGestures
+                        vm.focusOn(snap.target)
+                    }
+                }
         ) {
             renderer.renderInto(this)
         }
@@ -554,319 +548,151 @@ private fun SkyApp(
             )
         }
 
-        // ---------------- 聚焦锁定态：无框微光状态条（目标锚定 + 解除） ----------------
-        if (vm.focusMode) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .hudSafeInsets()
-                    .padding(top = 44.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "已锁定 · ${vm.selected?.displayName ?: ""}",
-                    fontSize = 11.sp,
-                    letterSpacing = 0.6.sp,
-                    color = Color(0xCC7DD3FC).redLightSafe(red),
-                    style = TextStyle(shadow = HudTextShadow)
-                )
-                Text(
-                    " · 解除",
-                    modifier = Modifier.clickable { vm.exitFocus() },
-                    fontSize = 11.sp,
-                    letterSpacing = 0.6.sp,
-                    color = Color(0x8F9AB2D6).redLightSafe(red),
-                    style = TextStyle(shadow = HudTextShadow)
-                )
-            }
-        }
-
-        // ---------------- 左上角：无框天文台信息流 ----------------
-        Column(
-            Modifier
-                .hudSafeInsets()
-                .align(Alignment.TopStart)
-                .padding(start = 18.dp, top = 8.dp)
-        ) {
-            // 观测地与定位状态（点击进入地点面板）
-            Row(
-                Modifier
-                    .clickable { showLocation = true }
-                    .padding(vertical = 3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Outlined.LocationOn, null,
-                    tint = Color(0xFF70D6FF).redLightSafe(red),
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(Modifier.width(7.dp))
-                Text(
-                    vm.site.nameZh + if (vm.gpsState ==
-                        com.celestiaview.ar.core.sensor.LocationProvider.GpsState.SEARCHING
-                    ) " · 定位中" else "",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xF2EDF5FF).redLightSafe(red),
-                    style = TextStyle(shadow = HudTextShadow)
-                )
-            }
-            // 天文遥测
-            Text(
-                "LST %02d:%02d:%02d · FOV %.0f°".format(
-                    lstH.toInt(), ((lstH % 1.0) * 60).toInt(),
-                    ((lstH * 60) % 60).toInt(), vm.fovYDeg
-                ),
-                modifier = Modifier.padding(top = 2.dp, start = 21.dp),
-                fontSize = 11.sp,
-                style = CelestialType.Tnum.copy(
-                    color = Color(0x999AB2D6).redLightSafe(red),
-                    shadow = HudTextShadow
-                )
-            )
-            Spacer(Modifier.height(18.dp))
-            // 当前视野印记：锁定天体或主星座（点击进入百科）
-            val viewMark = remember(vm.frameTick / 30) { currentViewMark(vm) }
-            Row(
-                Modifier
-                    .clickable { if (vm.selected != null) showDetail = true }
-                    .padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ViewMarkBadge(viewMark, red)
-                Spacer(Modifier.width(10.dp))
-                Column {
-                    Text(
-                        viewMark.titleZh,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xF2EDF5FF).redLightSafe(red),
-                        style = TextStyle(shadow = HudTextShadow)
-                    )
-                    Text(
-                        viewMark.titleEn,
-                        fontSize = 11.sp,
-                        letterSpacing = 1.5.sp,
-                        color = Color(0x999AB2D6).redLightSafe(red),
-                        style = TextStyle(shadow = HudTextShadow)
-                    )
-                    Text(
-                        viewMark.coordLine,
-                        fontSize = 10.sp,
-                        style = CelestialType.Tnum.copy(
-                            color = Color(0x999AB2D6).redLightSafe(red),
-                            shadow = HudTextShadow
-                        )
-                    )
-                }
-            }
-        }
-
-        // ---------------- 右上角：无框工具图标列 ----------------
-        Column(
-            Modifier
-                .hudSafeInsets()
-                .align(Alignment.TopEnd)
-                .padding(end = 18.dp, top = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                Icons.Outlined.Search, "搜索寻星",
-                tint = Color(0xCCDBE6F6).redLightSafe(red),
-                modifier = Modifier
-                    .size(19.dp)
-                    .clickable { showSearch = !showSearch }
-                    .padding(2.dp)
-            )
-            Icon(
-                Icons.Outlined.NightsStay, "今夜简报",
-                tint = Color(0xCCDBE6F6).redLightSafe(red),
-                modifier = Modifier
-                    .size(19.dp)
-                    .clickable { showTonight = !showTonight }
-                    .padding(2.dp)
-            )
-            Icon(
-                Icons.Outlined.AutoAwesome, "星图文化切换",
-                tint = Color(0xCCDBE6F6).redLightSafe(red),
-                modifier = Modifier
-                    .size(19.dp)
-                    .clickable { vm.cultureMode = vm.cultureMode.next() }
-                    .padding(2.dp)
-            )
-        }
-
-        // ---------------- 底部：暗夜羽化 + 深空时间与视场印记 + 幽灵船坞 ----------------
-        Box(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(84.dp)
-                .background(
-                    Brush.verticalGradient(listOf(Color.Transparent, Color(0xD902050D)))
-                )
-        )
-
-        if (!timeMachineExpanded) {
-            // 左下角：时间机器入口（脉冲星轨图标 + LST + 日期/倍速）
-            val lstText = remember((vm.simTimeMillis / 1000L)) {
-                "%02d:%02d:%02d".format(
-                    lstH.toInt(), ((lstH % 1.0) * 60).toInt(), ((lstH * 60) % 60).toInt()
-                )
-            }
-            val dateText = remember(vm.simTimeMillis / 3_600_000L) {
-                java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US)
-                    .format(java.util.Date(vm.simTimeMillis))
-            }
-            val rateText = remember(vm.isLive, vm.timeRate) {
-                if (vm.isLive) "LIVE" else "%s×".format(
-                    if (vm.timeRate % 1.0 == 0.0) "%d".format(vm.timeRate.toInt())
-                    else "%.1f".format(vm.timeRate)
-                )
-            }
-            Row(
+        // ================= 要素一：左下角唯一双行天体铭牌 =================
+        // 全屏唯一的天体标题位置（对标 SkyView 左下角）：
+        // 第一行 28sp 天蓝标题，第二行 15sp 纯白微光副标；
+        // 点击铭牌才展开深度百科面板。（内容 ~4Hz 节流重建）
+        val plate = remember(vm.selected, vm.frameTick / 15) { rememberNameplate(vm) }
+        if (plate != null) {
+            val slide = vm.focusProgress.coerceIn(0f, 1f)
+            Column(
                 Modifier
                     .align(Alignment.BottomStart)
                     .hudSafeInsets()
-                    .padding(start = 18.dp, bottom = 104.dp)
-                    .clickable { timeMachineExpanded = true }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StarTrailIcon(red)
-                Spacer(Modifier.width(9.dp))
-                Column {
-                    Text(
-                        "LST $lstText",
-                        fontSize = 14.sp,
-                        style = CelestialType.Tnum.copy(
-                            color = Color(0xF2EDF5FF).redLightSafe(red),
-                            shadow = HudTextShadow
-                        )
-                    )
-                    Text(
-                        "$dateText · $rateText",
-                        fontSize = 11.sp,
-                        style = CelestialType.Tnum.copy(
-                            color = Color(0x999AB2D6).redLightSafe(red),
-                            shadow = HudTextShadow
-                        )
-                    )
-                }
-            }
-            // 右下角：视场 / 姿态 + 聚焦切换开关
-            Row(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .hudSafeInsets()
-                    .padding(end = 18.dp, bottom = 112.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(start = 24.dp, bottom = 42.dp)
+                    .graphicsLayer {
+                        alpha = (0.35f + 0.65f * slide).coerceAtMost(1f)
+                        translationY = (1f - slide) * 12.dp.toPx()
+                    }
+                    .clickable { showDetail = true }
             ) {
                 Text(
-                    "FOV %.1f° · %s ›".format(vm.fovYDeg, if (vm.sensorMode) "传感器" else "手势"),
-                    modifier = Modifier
-                        .clickable { vm.toggleSensorMode() }
-                        .padding(2.dp),
-                    fontSize = 11.sp,
-                    style = CelestialType.Tnum.copy(
-                        color = Color(0x999AB2D6).redLightSafe(red),
-                        shadow = HudTextShadow
-                    )
+                    plate.title,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF5AC8FA).redLightSafe(red),
+                    style = TextStyle(shadow = HudTextShadow)
                 )
-                Spacer(Modifier.width(14.dp))
-                val focusOn = vm.focusMode
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    if (focusOn) "聚焦 开" else "聚焦 关",
-                    modifier = Modifier
-                        .clickable {
-                            if (focusOn) vm.exitFocus()
-                            else (vm.selected ?: vm.snapped?.target)?.let { vm.focusOn(it) }
-                        }
-                        .padding(2.dp),
-                    fontSize = 11.sp,
-                    color = (if (focusOn) accent else Color(0x999AB2D6)).redLightSafe(red),
+                    plate.subtitle,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xE6F1F5F9).redLightSafe(red),
                     style = TextStyle(shadow = HudTextShadow)
                 )
             }
         }
 
-        // 吸附目标裸信息行（未锁定时显示，点击聚焦目标并进入百科）
-        if (vm.selected == null) {
-            vm.snapped?.let { snap ->
-                Row(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .hudSafeInsets()
-                        .padding(bottom = 148.dp)
-                        .clickable {
-                            vm.focusOn(snap.target)
-                            showDetail = true
-                        }
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier
-                            .size(5.dp)
-                            .background(accent.redLightSafe(red), RoundedCornerShape(3.dp))
-                    )
-                    Spacer(Modifier.width(7.dp))
-                    Text(
-                        "%s · 高度 %.1f° · 方位 %.0f° · 详情 ›".format(
-                            snap.target.displayName, snap.altDeg, snap.azDeg
-                        ),
-                        fontSize = 12.sp,
-                        style = CelestialType.Tnum.copy(
-                            color = Color(0xCCDBE6F6).redLightSafe(red),
-                            shadow = HudTextShadow
-                        )
-                    )
-                }
-            }
-        }
-
-        // 幽灵船坞：六项无边框均分悬浮
+        // ================= 要素二：右侧边缘 3 个无框悬浮图标 =================
         Column(
             Modifier
-                .align(Alignment.BottomCenter)
-                .hudSafeInsets()
-                .fillMaxWidth()
+                .align(Alignment.BottomEnd)
+                .padding(end = 22.dp, bottom = 110.dp),
+            verticalArrangement = Arrangement.spacedBy(26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (timeMachineExpanded) {
-                TimeMachineScrubber(vm, true) { timeMachineExpanded = false }
-                Spacer(Modifier.height(8.dp))
-            }
-            Row(
+            Icon(
+                Icons.Outlined.Menu, "菜单",
+                tint = Color(0x88CBD5E1).redLightSafe(red),
+                modifier = Modifier
+                    .size(26.dp)
+                    .clickable { showMenu = !showMenu }
+            )
+            Icon(
+                Icons.Outlined.Search, "搜索寻星",
+                tint = Color(0x88CBD5E1).redLightSafe(red),
+                modifier = Modifier
+                    .size(26.dp)
+                    .clickable { showSearch = !showSearch }
+            )
+            Icon(
+                Icons.Outlined.Share, "星空快门",
+                tint = Color(0x88CBD5E1).redLightSafe(red),
+                modifier = Modifier
+                    .size(26.dp)
+                    .clickable { captureSnapshot() }
+            )
+        }
+
+        // ---------------- 时间机器刻度尺（内嵌浮层） ----------------
+        AnimatedVisibility(
+            visible = timeMachineExpanded,
+            enter = fadeIn(tween(240)) +
+                slideInVertically(tween(280, easing = FastOutSlowInEasing)) { it / 2 },
+            exit = fadeOut(tween(200)) +
+                slideOutVertically(tween(240, easing = FastOutSlowInEasing)) { it / 2 },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            TimeMachineScrubber(vm, true) { timeMachineExpanded = false }
+        }
+
+        // ================= 要素三：主菜单控制抽屉（应用内浮层，与主窗同窗） =================
+        AnimatedVisibility(
+            visible = showMenu,
+            enter = fadeIn(tween(240)),
+            exit = fadeOut(tween(200)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
                 Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 6.dp)
+                    .fillMaxSize()
+                    .background(Color(0xEA04070F))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    ) { showMenu = false }
             ) {
-                DockItem(
-                    Icons.Outlined.CameraAlt, "实景", vm.arMode, red,
-                    Modifier.weight(1f)
-                ) { vm.toggleArMode() }
-                DockItem(
-                    Icons.Outlined.ScreenRotation, "姿态", vm.sensorMode, red,
-                    Modifier.weight(1f)
-                ) { vm.toggleSensorMode() }
-                DockItem(
-                    Icons.Outlined.AutoAwesome, "星官",
-                    vm.cultureMode != CultureMode.IAU, red,
-                    Modifier.weight(1f)
-                ) { vm.cultureMode = vm.cultureMode.next() }
-                DockItem(
-                    Icons.Outlined.Layers, "图层", showLayers, red,
-                    Modifier.weight(1f)
-                ) { showLayers = !showLayers }
-                DockItem(
-                    Icons.Outlined.Schedule, "时间", timeMachineExpanded, red,
-                    Modifier.weight(1f)
-                ) { timeMachineExpanded = !timeMachineExpanded }
-                DockItem(
-                    Icons.Outlined.Nightlight, "夜视", vm.redLight, red,
-                    Modifier.weight(1f)
-                ) { vm.toggleRedLight() }
+                GlassCard(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 20.dp)
+                        .width(248.dp)
+                        .verticalScroll(rememberScrollState()),
+                    cornerRadius = 24.dp,
+                    redLight = red,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)
+                ) {
+                    MenuRow("实景相机", if (vm.arMode) "开" else "关", red) { vm.toggleArMode() }
+                    MenuRow("姿态源", if (vm.sensorMode) "陀螺仪" else "手势", red) {
+                        vm.toggleSensorMode()
+                    }
+                    MenuRow("时间机器", "", red) {
+                        showMenu = false; timeMachineExpanded = true
+                    }
+                    MenuRow("今夜简报", "", red) {
+                        showMenu = false; showTonight = true
+                    }
+                    MenuRow("图层开关", "", red) {
+                        showMenu = false; showLayers = true
+                    }
+                    MenuRow("观测地点", vm.site.nameZh, red) {
+                        showMenu = false; showLocation = true
+                    }
+                    MenuRow("红光夜视", if (vm.redLight) "开" else "关", red) {
+                        vm.toggleRedLight()
+                    }
+                    MenuRow("环境音", if (vm.soundOn) "开" else "关", red) {
+                        vm.toggleSound()
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "中西星官",
+                        fontSize = 11.sp,
+                        letterSpacing = 1.sp,
+                        color = Color(0xFF94A3B8).redLightSafe(red)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row {
+                        CultureMode.entries.forEach { mode ->
+                            NakedTextButton(
+                                mode.labelZh,
+                                selected = vm.cultureMode == mode,
+                                redLight = red
+                            ) { vm.cultureMode = mode }
+                        }
+                    }
+                }
             }
         }
 
@@ -886,7 +712,7 @@ private fun SkyApp(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .hudSafeInsets()
-                .padding(bottom = 150.dp) // 让出底部印记与船坞
+                .padding(bottom = 110.dp)
         ) {
             // 面板过渡统一缓动：FastOutSlowIn + 240/280ms，杜绝生硬直切
             AnimatedVisibility(
@@ -925,36 +751,118 @@ private fun SkyApp(
 }
 
 // ----------------------------------------------------------------------
+// 左下角铭牌内容构建（目标变化时重建，避免逐帧字符串分配）
+// ----------------------------------------------------------------------
+
+private data class Nameplate(val title: String, val subtitle: String)
+
+private fun rememberNameplate(vm: SkyViewModel): Nameplate? {
+    val target = vm.selected ?: return null
+    val f = vm.frame
+    return when (target) {
+        is CelestialTarget.MessierTarget -> {
+            val o = target.dso
+            val typeName = when (o.type) {
+                DsoType.GALAXY -> "旋涡星系"
+                DsoType.NEBULA -> "弥漫星云"
+                DsoType.GLOBULAR_CLUSTER -> "球状星团"
+                DsoType.OPEN_CLUSTER -> "疏散星团"
+                DsoType.PLANETARY_NEBULA -> "行星状星云"
+                DsoType.SUPERNOVA_REMNANT -> "超新星遗迹"
+            }
+            val dist = when {
+                o.distanceKly <= 0 -> ""
+                o.distanceKly < 10 -> "距离 %.0f 光年 · ".format(o.distanceKly * 1000.0)
+                else -> "距离 %.0f 万光年 · ".format(o.distanceKly / 10.0)
+            }
+            Nameplate(
+                "${o.catalogId} · ${o.nameZh}",
+                "$typeName · ${dist}视星等 ${"%+.1f".format(o.mag)}"
+            )
+        }
+        is CelestialTarget.PlanetTarget -> {
+            val meta = f.planets.firstOrNull { it.meta.key == target.key }?.meta
+            val en = meta?.nameEn ?: target.key.lowercase().replaceFirstChar { it.uppercase() }
+            val desc = meta?.description?.substringBefore('，')?.substringBefore('。') ?: ""
+            val sub = if (desc.isNotBlank()) "$desc · ${target.displayName}"
+            else "${target.displayName} · 太阳系行星"
+            Nameplate("$en · ${target.displayName}", sub)
+        }
+        is CelestialTarget.MoonTarget -> Nameplate(
+            "Moon · 月球",
+            "${f.moonEph.phaseNameZh} · 照明率 ${(f.moonEph.illuminationFraction * 100).toInt()}%"
+        )
+        is CelestialTarget.SunTarget -> Nameplate(
+            "Sun · 太阳", "G2V 主序星 · 太阳系中心恒星"
+        )
+        is CelestialTarget.StarTarget -> {
+            val s = target.star
+            val dist = if (s.distLy > 0) "距离 %.0f 光年 · ".format(s.distLy) else ""
+            Nameplate(
+                "${s.nameEn} · ${s.nameZh}",
+                "${s.spectral} 型 · ${dist}视星等 ${"%+.2f".format(s.mag)}"
+            )
+        }
+    }
+}
+
+/** 菜单抽屉行：标签 + 状态值，无框点击区域。 */
+@Composable
+private fun MenuRow(label: String, value: String, red: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = Color(0xE6F1F5F9).redLightSafe(red),
+            modifier = Modifier.weight(1f)
+        )
+        if (value.isNotBlank()) {
+            Text(
+                value,
+                fontSize = 11.sp,
+                color = Color(0xFF94A3B8).redLightSafe(red)
+            )
+        }
+    }
+}
+
+// ----------------------------------------------------------------------
 // 地点选择面板
 // ----------------------------------------------------------------------
 
 @Composable
 private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> Unit) {
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else DeepSpacePalette.AstralGold
+    val sectionColor = Color(0xFF94A3B8).redLightSafe(red)
     val context = LocalContext.current
     var manualLat by remember { mutableStateOf("") }
     var manualLon by remember { mutableStateOf("") }
 
-    GlassPanel(
+    GlassCard(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp),
-        cornerRadius = 24.dp, redLight = red
+        cornerRadius = 24.dp, redLight = red,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp)
     ) {
         Column(
             Modifier
-                .padding(14.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "观测地点 · 暗夜保护区",
-                    color = accent.redLightSafe(red),
+                    color = sectionColor,
                     fontSize = 15.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = sectionColor)
                 }
             }
             vm.locationProvider.presets.forEach { site ->
@@ -993,7 +901,7 @@ private fun LocationPickerPanel(vm: SkyViewModel, red: Boolean, onClose: () -> U
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "罗盘方位角微调 Trim",
-                    color = accent.redLightSafe(red),
+                    color = sectionColor,
                     fontSize = 12.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
@@ -1056,7 +964,7 @@ private fun SiteRow(site: ObservingSite, selected: Boolean, red: Boolean, onClic
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .background(
-                if (selected) DeepSpacePalette.AstralGold.copy(alpha = 0.15f) else Color.Transparent,
+                Color(0x2694A3B8).redLightSafe(red),
                 RoundedCornerShape(12.dp)
             )
             .clickable(onClick = onClick)
@@ -1090,22 +998,23 @@ private fun LayerSettingsPanel(
     onOpenLocation: () -> Unit,
     onClose: () -> Unit
 ) {
-    val accent = if (red) DeepSpacePalette.RedSafePrimary else CelestialPalette.AccentGold
-    GlassPanel(
+    val sectionColor = Color(0xFF94A3B8).redLightSafe(red)
+    GlassCard(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp),
-        cornerRadius = 24.dp, redLight = red
+        cornerRadius = 24.dp, redLight = red,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp)
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "图层显示 LAYERS", color = accent.redLightSafe(red),
+                    "图层显示 LAYERS", color = sectionColor,
                     fontSize = 15.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Outlined.Close, "关闭", tint = accent.redLightSafe(red))
+                    Icon(Icons.Outlined.Close, "关闭", tint = sectionColor)
                 }
             }
             val toggles = listOf(
@@ -1140,7 +1049,7 @@ private fun LayerSettingsPanel(
             Spacer(Modifier.padding(6.dp))
             Text(
                 "星图文化体系",
-                color = accent.redLightSafe(red),
+                color = sectionColor,
                 fontSize = 12.sp, fontWeight = FontWeight.Bold
             )
             Row(Modifier.padding(top = 4.dp)) {
@@ -1152,11 +1061,11 @@ private fun LayerSettingsPanel(
                 }
             }
 
-            // ---------------- 快捷操作（自右侧工具栏迁入） ----------------
+            // ---------------- 快捷操作 ----------------
             Spacer(Modifier.padding(6.dp))
             Text(
                 "快捷操作",
-                color = accent.redLightSafe(red),
+                color = sectionColor,
                 fontSize = 12.sp, fontWeight = FontWeight.Bold
             )
             Row(Modifier.padding(top = 4.dp)) {
@@ -1170,169 +1079,5 @@ private fun LayerSettingsPanel(
                 ) { vm.toggleSound() }
             }
         }
-    }
-}
-
-// ----------------------------------------------------------------------
-// 左上角视野印记与底部时间印记
-// ----------------------------------------------------------------------
-
-/** 当前视野印记：锁定天体优先，其次视轴主星座。 */
-private data class ViewMark(
-    val titleZh: String,
-    val titleEn: String,
-    val coordLine: String,
-    val abbr: String?
-)
-
-/** 计算当前视野印记（约 2Hz 调用一次；星座中心解算 48 次属可接受成本）。 */
-private fun currentViewMark(vm: SkyViewModel): ViewMark {
-    vm.selected?.let { t ->
-        val en = when (t) {
-            is CelestialTarget.StarTarget -> t.star.nameEn
-            is CelestialTarget.PlanetTarget -> t.key.takeIf { it.startsWith("CONST:") }
-                ?.removePrefix("CONST:")?.let { abbr ->
-                    ConstellationCatalog.byAbbr(abbr)?.nameEn
-                } ?: ""
-            else -> ""
-        }
-        val abbr = when (t) {
-            is CelestialTarget.StarTarget -> t.star.constellation
-            is CelestialTarget.PlanetTarget ->
-                t.key.takeIf { it.startsWith("CONST:") }?.removePrefix("CONST:")
-            else -> null
-        }
-        return ViewMark(t.displayName, en, raDecLine(t.raDeg, t.decDeg), abbr)
-    }
-    val active = vm.constellationActivation.maxByOrNull { it.value }
-    val c = if (active != null && active.value > 0.08f) {
-        ConstellationCatalog.byAbbr(active.key)
-    } else {
-        nearestConstellation(vm)
-    } ?: ConstellationCatalog.constellations.first()
-    val center = ConstellationCatalog.centerRaDec(c)
-    return ViewMark(c.nameZh, c.nameEn, raDecLine(center.raDeg, center.decDeg), c.abbr)
-}
-
-private fun nearestConstellation(vm: SkyViewModel): Constellation? {
-    val f = vm.frame
-    val b = vm.boresight
-    var best: Constellation? = null
-    var bestSep = Double.MAX_VALUE
-    for (c in ConstellationCatalog.constellations) {
-        val center = ConstellationCatalog.centerRaDec(c)
-        val hz = AstrometryEngine.equatorialToHorizontal(
-            center.raDeg, center.decDeg, f.lstDeg, f.latitudeDeg
-        )
-        val sep = AstrometryEngine.angularSeparationDeg(
-            b.azDeg, b.altDeg, hz.azDeg, hz.altDeg
-        )
-        if (sep < bestSep) {
-            bestSep = sep
-            best = c
-        }
-    }
-    return best
-}
-
-private fun raDecLine(raDeg: Double, decDeg: Double): String {
-    val h = raDeg / 15.0
-    val hh = h.toInt()
-    val mm = ((h - hh) * 60).toInt()
-    val sign = if (decDeg < 0) "-" else "+"
-    val ad = kotlin.math.abs(decDeg)
-    val dd = ad.toInt()
-    val dm = ((ad - dd) * 60).toInt()
-    return "RA %02dh %02dm · Dec %s%02d° %02d′".format(hh, mm, sign, dd, dm)
-}
-
-/** 22dp 星座微缩连线图（静态赤道坐标归一化，remember 级缓存）。 */
-private class MiniFigure(val pts: FloatArray, val edges: List<Pair<Int, Int>>)
-
-@Composable
-private fun ViewMarkBadge(mark: ViewMark, red: Boolean) {
-    val lineColor = Color(0xCCDBE6F6).redLightSafe(red)
-    val fig = remember(mark.abbr) {
-        val abbr = mark.abbr ?: return@remember null
-        val c = ConstellationCatalog.byAbbr(abbr) ?: return@remember null
-        val members = c.memberStarIds.map { BrightStarCatalog.byId(it) }
-        if (members.isEmpty()) return@remember null
-        var minRa = Double.MAX_VALUE; var maxRa = -Double.MAX_VALUE
-        var minDec = Double.MAX_VALUE; var maxDec = -Double.MAX_VALUE
-        for (s in members) {
-            if (s.raDeg < minRa) minRa = s.raDeg
-            if (s.raDeg > maxRa) maxRa = s.raDeg
-            if (s.decDeg < minDec) minDec = s.decDeg
-            if (s.decDeg > maxDec) maxDec = s.decDeg
-        }
-        val spanRa = (maxRa - minRa).coerceAtLeast(1e-3)
-        val spanDec = (maxDec - minDec).coerceAtLeast(1e-3)
-        val pts = FloatArray(members.size * 2)
-        members.forEachIndexed { i, s ->
-            pts[i * 2] = ((s.raDeg - minRa) / spanRa).toFloat()
-            pts[i * 2 + 1] = (1.0 - (s.decDeg - minDec) / spanDec).toFloat()
-        }
-        // 边以全局星表 ID 表示，映射为成员序号
-        val idToIdx = HashMap<Int, Int>(members.size * 2)
-        members.forEachIndexed { i, s -> idToIdx[s.id] = i }
-        val edges = c.edges.mapNotNull { (a, b) ->
-            val ia = idToIdx[a]
-            val ib = idToIdx[b]
-            if (ia != null && ib != null) ia to ib else null
-        }
-        MiniFigure(pts, edges)
-    }
-    androidx.compose.foundation.Canvas(Modifier.size(22.dp)) {
-        val w = size.width
-        val h = size.height
-        val pad = 2.dp.toPx()
-        val sx = w - pad * 2
-        val sy = h - pad * 2
-        fun px(u: Float) = pad + u * sx
-        fun py(v: Float) = pad + v * sy
-        if (fig == null) {
-            // 非星座目标：四芒星光印记
-            val c = androidx.compose.ui.geometry.Offset(w / 2f, h / 2f)
-            drawLine(lineColor, Offset(c.x - 7.dp.toPx(), c.y), Offset(c.x + 7.dp.toPx(), c.y), 0.8.dp.toPx())
-            drawLine(lineColor, Offset(c.x, c.y - 7.dp.toPx()), Offset(c.x, c.y + 7.dp.toPx()), 0.8.dp.toPx())
-            drawLine(lineColor, Offset(c.x - 4.dp.toPx(), c.y - 4.dp.toPx()), Offset(c.x + 4.dp.toPx(), c.y + 4.dp.toPx()), 0.6.dp.toPx())
-            drawLine(lineColor, Offset(c.x - 4.dp.toPx(), c.y + 4.dp.toPx()), Offset(c.x + 4.dp.toPx(), c.y - 4.dp.toPx()), 0.6.dp.toPx())
-            drawCircle(lineColor, 1.2.dp.toPx(), c)
-            return@Canvas
-        }
-        for ((a, b) in fig.edges) {
-            drawLine(
-                lineColor,
-                Offset(px(fig.pts[a * 2]), py(fig.pts[a * 2 + 1])),
-                Offset(px(fig.pts[b * 2]), py(fig.pts[b * 2 + 1])),
-                0.6.dp.toPx()
-            )
-        }
-        for (i in 0 until fig.pts.size / 2) {
-            drawCircle(lineColor, 0.7.dp.toPx(), Offset(px(fig.pts[i * 2]), py(fig.pts[i * 2 + 1])))
-        }
-    }
-}
-
-/** 18dp 脉冲星轨小图标：弧线 + 端点星。 */
-@Composable
-private fun StarTrailIcon(red: Boolean) {
-    val color = Color(0xFF70D6FF).redLightSafe(red)
-    androidx.compose.foundation.Canvas(Modifier.size(18.dp)) {
-        val stroke = 1.dp.toPx()
-        val r = 6.5.dp.toPx()
-        val c = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
-        drawArc(
-            color = color,
-            startAngle = 200f,
-            sweepAngle = 260f,
-            useCenter = false,
-            topLeft = androidx.compose.ui.geometry.Offset(c.x - r, c.y - r),
-            size = Size(r * 2, r * 2),
-            style = Stroke(width = stroke)
-        )
-        // 弧端星点（200° 端）
-        val a = Math.toRadians(200.0)
-        drawCircle(color, 1.4.dp.toPx(), Offset(c.x + r * kotlin.math.cos(a).toFloat(), c.y + r * kotlin.math.sin(a).toFloat()))
     }
 }
